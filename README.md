@@ -25,7 +25,7 @@ npm install
 ```bash
 npm run dev
 ```
-- 로컬 접속 주소: http://localhost:3000
+- 로컬 접속 주소: http://localhost:5173
 
 ## 🔗 Environment Variables (`.env.local`)
 
