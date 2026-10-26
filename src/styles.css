@@ -1,19 +1,19 @@
 :root {
-  --bg: #0f0f14;
-  --surface: #181820;
-  --surface-2: #21212c;
-  --line: #2c2c3a;
-  --text: #f1f1f6;
-  --muted: #9a9ab0;
-  --accent: #8b6cff;
-  --accent-2: #b39dff;
-  --ok: #3ecf8e;
-  --danger: #ff6b7a;
-  --warn: #ffc857;
-  --vip: #e9b44c;
-  --r: #7aa2ff;
-  --s: #7bd3c0;
-  --radius: 14px;
+    --bg: #ffffff; /* 배경화면 */
+    --surface: #e6e6e6; /* 공연 설명 배경 */
+    --surface-2: #ffffff; /* 선택 가능 좌석 배경 */
+    --line: #362b48; /* 버튼 바깥선 */
+    --text: #1e1926; /* 제목, 가격, 좌석 번호 등 메인 글자 */
+    --muted: #4a4453; /* 공연 설명 등 서브 글자*/
+    --accent: #006bd1; /* 선택한 좌석 배경 */
+    --accent-2: #008eff; /* FDS 글자 */
+    --ok: #3c889e; /* 예매 완료 */
+    --danger: #ff0000; /* 4석 제한 문구 */
+    --warn: #ff4b0f; /* 선점 유지 시간 */
+    --vip: #ff0071;
+    --r: #ff683e;
+    --s: #0600ff;
+    --radius: 14px;
 }
 
 * { box-sizing: border-box; }
@@ -32,7 +32,7 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 .container { max-width: 1120px; margin: 0 auto; padding: 28px 16px 64px; }
 
 /* header */
-.header { position: sticky; top: 0; z-index: 10; background: rgba(15,15,20,.88); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+.header { position: sticky; top: 0; z-index: 10; background: #e0edf2; backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
 .header-inner { max-width: 1120px; margin: 0 auto; padding: 0 16px; height: 60px; display: flex; align-items: center; gap: 24px; }
 .brand { display: inline-flex; align-items: center; gap: 8px; font-weight: 500; letter-spacing: .08em; font-size: 15px; }
 .brand b { color: var(--accent-2); font-weight: 700; }
