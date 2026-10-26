@@ -8,11 +8,11 @@ export default function Header() {
     <header className="header">
       <div className="header-inner">
         <NavLink to="/" className="brand">
-          <span className="brand-dot" /> TICKET<b>/FDS</b>
+          <span className="brand-dot" /> TICKET |<b>BTS</b>
         </NavLink>
         <nav className="nav">
           <NavLink to="/" end>공연</NavLink>
-          <NavLink to="/my">마이페이지</NavLink>
+          <NavLink to="/my">마이 페이지</NavLink>
         </nav>
         <div className="who">
           <span className="who-id">{userId}</span>
