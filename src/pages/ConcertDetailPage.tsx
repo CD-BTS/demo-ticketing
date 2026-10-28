@@ -7,6 +7,7 @@ import { useAuth } from '../auth/AuthContext'
 import { dateTime, won } from '../components/format'
 import SeatMap from '../components/SeatMap'
 import { useBehavior } from '../hooks/useBehavior'
+import { recordSeatClick } from '../risk/signals'
 
 const MAX_SEATS = 4
 
@@ -27,6 +28,7 @@ export default function ConcertDetailPage() {
 
   // "예매 소요 시간" feature 후보: 좌석 화면 진입 시각 기준 경과 시간을 이벤트에 실어 보낸다
   const enteredAt = useRef(Date.now())
+  const firstSelectDone = useRef(false)
   const elapsed = () => Date.now() - enteredAt.current
 
   const loadSeats = useCallback(async () => {
@@ -39,8 +41,10 @@ export default function ConcertDetailPage() {
   useEffect(() => {
     if (!userId) return
     enteredAt.current = Date.now()
+    firstSelectDone.current = false
     Promise.all([ticketing.getConcert(id), loadSeats()])
       .then(([c]) => {
+        enteredAt.current = Date.now()
         setConcert(c)
         track('VIEW_CONCERT', { concertId: id })
         track('VIEW_SEATS', { concertId: id })
@@ -80,6 +84,11 @@ export default function ConcertDetailPage() {
         return prev
       }
       track('SELECT_SEAT', { concertId: id, seatId: seat.id, elapsedMs: elapsed() })
+      if (userId) {
+        const first = !firstSelectDone.current
+        firstSelectDone.current = true
+        recordSeatClick(userId, Date.now(), first ? elapsed() / 1000 : undefined)
+      }
       return [...prev, seat.id]
     })
   }
@@ -133,7 +142,7 @@ export default function ConcertDetailPage() {
       <section className="detail-main">
         <div
           className="detail-hero"
-          style={{ background: `linear-gradient(135deg, hsl(${concert.hue} 70% 38%), hsl(${(concert.hue + 50) % 360} 75% 22%))` }}
+          style={{ background: `hsl(${concert.hue} 60% 38%)` }}
         >
           <span className="poster-artist">{concert.artist}</span>
           <h1>{concert.title}</h1>

@@ -6,7 +6,7 @@
  * VITE_USE_MOCK_TICKETING=false 로 바꾸면 화면 코드는 그대로 쓸 수 있다.
  */
 import { ApiError, request, sleep, USE_MOCK_TICKETING } from './client'
-import type { Booking, Concert, Seat, SeatGrade, SeatHold } from './types'
+import type { Booking, Concert, Seat, SeatGrade, SeatHold, TicketQr } from './types'
 
 const HOLD_MS = 5 * 60 * 1000 // 선점 유지 시간 (가정: 5분)
 const ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
@@ -20,6 +20,8 @@ export interface TicketingApi {
   confirmBooking(holdId: string, userId: string): Promise<Booking>
   cancelBooking(bookingId: string, userId: string): Promise<Booking>
   listMyBookings(userId: string): Promise<Booking[]>
+  /** 예매 건의 입장 QR 데이터. 아직 발급 전이면 null */
+  getTicketQr(bookingId: string, userId: string): Promise<TicketQr | null>
 }
 
 // ------------------------------------------------------------------
@@ -78,6 +80,7 @@ interface Stored {
   booked: Record<string, string[]> // concertId -> 예매 확정된 seatIds
   holds: StoredHold[]
   bookings: (Booking & { userId: string })[]
+  expired?: Record<string, number> // userId -> 선점 후 미입금(확정 없이 만료) 횟수
 }
 
 const KEY = 'fds.mock.ticketing'
@@ -100,7 +103,24 @@ function save(s: Stored) {
 // 만료된 선점 정리 — 만료 시 좌석은 다시 AVAILABLE (상태 복구)
 function purge(s: Stored) {
   const now = Date.now()
+  for (const h of s.holds) {
+    if (new Date(h.expiresAt).getTime() <= now) {
+      s.expired = { ...s.expired, [h.userId]: (s.expired?.[h.userId] ?? 0) + 1 } // 미입금 자동취소 집계
+    }
+  }
   s.holds = s.holds.filter((h) => new Date(h.expiresAt).getTime() > now)
+}
+
+/**
+ * 선점 후 확정하지 않고 만료된 횟수 (Credit 의 Cauto).
+ * mock 에서만 계산한다. 실제 서버 연동 시에는 서버가 집계한 값을 받아야 하므로 0 을 돌려준다(TODO).
+ */
+export function getAutoCancelCount(userId: string): number {
+  if (!USE_MOCK_TICKETING) return 0
+  const s = load()
+  purge(s)
+  save(s)
+  return s.expired?.[userId] ?? 0
 }
 
 const soldOut = (concertId: string): Set<string> => {
@@ -217,6 +237,12 @@ const mock: TicketingApi = {
     await sleep(200)
     return load().bookings.filter((b) => b.userId === userId)
   },
+  // QR 발급 API 전: 기본은 null("발급 전"). 화면 확인용으로 VITE_MOCK_QR=true 면 임시 토큰을 준다.
+  async getTicketQr(bookingId) {
+    await sleep(200)
+    if (import.meta.env.VITE_MOCK_QR !== 'true') return null
+    return { token: `MOCK-QR:${bookingId}:${Date.now()}`, refreshIntervalSec: 15 }
+  },
 }
 
 // ------------------------------------------------------------------
@@ -230,6 +256,8 @@ const real: TicketingApi = {
   confirmBooking: (holdId) => request('POST', '/bookings', { holdId }),
   cancelBooking: (bookingId) => request('POST', `/bookings/${bookingId}/cancel`),
   listMyBookings: () => request('GET', '/bookings/me'),
+  // TODO: QR 발급 API 경로 확정 후 수정 (현재 경로는 가정)
+  getTicketQr: (bookingId) => request('GET', `/bookings/${bookingId}/qr`),
 }
 
 export const ticketing: TicketingApi = USE_MOCK_TICKETING ? mock : real

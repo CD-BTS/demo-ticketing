@@ -26,9 +26,7 @@ export default function ConcertListPage() {
           <Link key={c.id} to={`/concerts/${c.id}`} className="card concert-card">
             <div
               className="poster"
-              style={{
-                background: `linear-gradient(135deg, hsl(${c.hue} 70% 38%), hsl(${(c.hue + 50) % 360} 75% 22%))`,
-              }}
+              style={{ background: `hsl(${c.hue} 60% 38%)` }}
             >
               <span className="poster-artist">{c.artist}</span>
               <span className="poster-title">{c.title}</span>

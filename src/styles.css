@@ -57,7 +57,7 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 .btn-block { width: 100%; margin-top: 10px; }
 
 /* login */
-.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: radial-gradient(900px 500px at 70% -10%, rgba(139,108,255,.22), transparent), var(--bg); }
+.login-wrap { min-height: 100vh; display: grid; place-items: center; padding: 16px; background: var(--bg); }
 .login-card { width: 100%; max-width: 400px; background: var(--surface); border: 1px solid var(--line); border-radius: 20px; padding: 32px; }
 .login-card h1 { font-size: 22px; margin-bottom: 8px; }
 .field { display: block; margin: 22px 0 14px; }
@@ -73,7 +73,7 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .concert-card { transition: transform .15s, border-color .15s; }
 .concert-card:hover { transform: translateY(-3px); border-color: var(--accent); }
-.poster { height: 170px; padding: 18px; display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; }
+.poster { color: #fff; height: 170px; padding: 18px; display: flex; flex-direction: column; justify-content: flex-end; gap: 4px; }
 .poster-artist { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; opacity: .85; }
 .poster-title { font-size: 20px; font-weight: 700; line-height: 1.25; }
 .card-body { padding: 16px 18px 18px; }
@@ -83,7 +83,7 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 
 /* detail */
 .detail { display: grid; grid-template-columns: 1fr 320px; gap: 24px; align-items: start; }
-.detail-hero { border-radius: var(--radius); padding: 28px; margin-bottom: 20px; }
+.detail-hero { color: #fff; border-radius: var(--radius); padding: 28px; margin-bottom: 20px; }
 .detail-hero h1 { font-size: 28px; margin: 6px 0; }
 .detail-hero p { margin: 0; opacity: .85; font-size: 14px; }
 .panel { position: sticky; top: 80px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; }
@@ -138,3 +138,29 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
   .who-id { display: none; }
   .seat { width: 26px; height: 26px; font-size: 10px; }
 }
+
+/* account summary (my page) */
+.account { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 6px 0 0; font-size: 14px; color: var(--muted); }
+.account b { color: var(--text); }
+.account-sub { font-size: 12px; }
+.grade { padding: 2px 8px; border-radius: 999px; font-size: 13px; }
+.grade-우수 { background: rgba(60,136,158,.16); color: var(--ok) !important; }
+.grade-안전 { background: rgba(0,107,209,.12); color: var(--accent) !important; }
+.grade-주의 { background: rgba(255,75,15,.12); color: var(--warn) !important; }
+.grade-위험 { background: rgba(255,0,0,.12); color: var(--danger) !important; }
+.account-detail { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+.account-detail summary { cursor: pointer; width: max-content; }
+.account-detail ul { list-style: none; margin: 8px 0; padding: 10px 12px; max-width: 460px; background: var(--surface); border-radius: 10px; display: grid; gap: 6px; }
+.account-detail li { display: flex; justify-content: space-between; gap: 12px; }
+.account-detail li.is-hit b { color: var(--danger); }
+.account-detail li.sum { border-top: 1px dashed var(--line); padding-top: 6px; font-weight: 500; }
+
+/* booking actions */
+.booking-actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; flex-shrink: 0; }
+
+/* modal */
+.modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgba(0, 0, 0, .5); }
+.modal { width: 100%; max-width: 340px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 16px; padding: 24px; text-align: center; }
+.modal h2 { font-size: 18px; margin-bottom: 6px; }
+.qr-box { min-height: 240px; margin: 16px 0 6px; display: grid; place-items: center; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.qr-box svg { max-width: 100%; height: auto; }

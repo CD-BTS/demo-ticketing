@@ -79,3 +79,19 @@ export interface Booking {
   status: BookingStatus
   createdAt: string
 }
+
+// ---- 입장용 QR ----
+/**
+ * 예매 건별 입장 QR 데이터. 백엔드(인영) QR API 확정 후 필드 보완.
+ * 지금은 정적 QR이지만 추후 동적 QR(15초마다 갱신)로 바뀔 예정:
+ *  - token: QR에 담길 문자열(검표 서버가 검증)
+ *  - refreshIntervalSec: 있으면 그 주기(15)로 다시 받아와 QR 교체
+ */
+export interface TicketQr {
+  token: string
+  expiresAt?: string
+  refreshIntervalSec?: number
+}
+
+// ---- 계정 등급 / 의심 점수 (산식: src/risk/credit.ts) ----
+export type { CreditResult as AccountRisk } from '../risk/credit'

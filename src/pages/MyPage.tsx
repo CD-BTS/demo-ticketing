@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { ApiError } from '../api/client'
+import { getAccountRisk } from '../api/bts'
 import { ticketing } from '../api/ticketing'
-import type { Booking } from '../api/types'
+import type { AccountRisk, Booking } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { dateTime, won } from '../components/format'
+import QrModal from '../components/QrModal'
 import { useBehavior } from '../hooks/useBehavior'
 
 export default function MyPage() {
@@ -16,6 +18,8 @@ export default function MyPage() {
   const [bookings, setBookings] = useState<Booking[] | null>(null)
   const [error, setError] = useState('')
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [qrBooking, setQrBooking] = useState<Booking | null>(null)
+  const [risk, setRisk] = useState<AccountRisk | null>(null)
 
   const load = useCallback(async () => {
     if (!userId) return
@@ -29,6 +33,13 @@ export default function MyPage() {
   useEffect(() => {
     load()
   }, [load])
+
+  useEffect(() => {
+    if (!userId) return
+    getAccountRisk(userId)
+      .then(setRisk)
+      .catch(() => setRisk(null))
+  }, [userId, bookings]) // 예매/취소 후에도 다시 계산
 
   const cancel = async (b: Booking) => {
     if (!userId || !window.confirm(`'${b.concertTitle}' 예매를 취소할까요?`)) return
@@ -49,6 +60,33 @@ export default function MyPage() {
     <>
       <h1 className="page-title">마이페이지</h1>
       <p className="muted">사용자 ID: <b>{userId}</b></p>
+      <div className="account">
+        <span>
+          계정 등급{' '}
+          <b className={risk ? `grade grade-${risk.grade}` : ''}>{risk ? risk.grade : '—'}</b>
+          {risk && <span className="account-sub"> (신용 {risk.credit}점)</span>}
+        </span>
+        <span>의심 점수 <b>{risk ? risk.suspicionScore : '—'}</b></span>
+      </div>
+      {risk && (
+        <details className="account-detail">
+          <summary>산정 내역 보기</summary>
+          <ul>
+            <li><span>기본 신뢰도</span><b>{risk.baseCredit}</b></li>
+            {risk.penalties.map((p) => (
+              <li key={p.key} className={p.points ? 'is-hit' : ''}>
+                <span>{p.label}</span>
+                <b>{p.points ? `−${p.points}` : '0'}</b>
+              </li>
+            ))}
+            <li className="sum"><span>신용 점수 (기본 − 감점 합계 {risk.suspicionScore})</span><b>{risk.credit}</b></li>
+          </ul>
+          <p className="small muted">
+            현재는 브라우저에서 측정 가능한 항목만 반영한 참고값입니다. AI 이상 점수, 카드·IP 집계, 관람·노쇼 이력은
+            서버 연동 후 반영됩니다.
+          </p>
+        </details>
+      )}
       {justBooked && <p className="notice">예매가 완료되었습니다.</p>}
       {error && <p className="error" role="alert">{error}</p>}
 
@@ -74,14 +112,19 @@ export default function MyPage() {
                 <p className="meta small">예매번호 {b.id}</p>
               </div>
               {b.status === 'CONFIRMED' && (
-                <button className="btn btn-ghost btn-sm" disabled={busyId === b.id} onClick={() => cancel(b)}>
-                  {busyId === b.id ? '취소 중…' : '예매 취소'}
-                </button>
+                <div className="booking-actions">
+                  <button className="btn btn-primary btn-sm" onClick={() => setQrBooking(b)}>QR 보기</button>
+                  <button className="btn btn-ghost btn-sm" disabled={busyId === b.id} onClick={() => cancel(b)}>
+                    {busyId === b.id ? '취소 중…' : '예매 취소'}
+                  </button>
+                </div>
               )}
             </li>
           ))}
         </ul>
       )}
+
+      {qrBooking && userId && <QrModal booking={qrBooking} userId={userId} onClose={() => setQrBooking(null)} />}
     </>
   )
 }

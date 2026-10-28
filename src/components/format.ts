@@ -12,3 +12,5 @@ export const dateTime = (iso: string) =>
 
 export const dateShort = (iso: string) =>
   new Date(iso).toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' })
+
+export const seatLabel = (ids: string[]) => ids.join(', ')
