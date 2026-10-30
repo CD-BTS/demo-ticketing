@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ApiError } from '../api/client'
 import { ticketing } from '../api/ticketing'
-import type { Concert, Seat, SeatHold } from '../api/types'
+import type { Concert, Seat } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { dateTime, won } from '../components/format'
 import SeatMap from '../components/SeatMap'
@@ -20,8 +20,6 @@ export default function ConcertDetailPage() {
   const [concert, setConcert] = useState<Concert | null>(null)
   const [seats, setSeats] = useState<Seat[]>([])
   const [selected, setSelected] = useState<string[]>([])
-  const [hold, setHold] = useState<SeatHold | null>(null)
-  const [remaining, setRemaining] = useState(0)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -43,33 +41,16 @@ export default function ConcertDetailPage() {
     enteredAt.current = Date.now()
     firstSelectDone.current = false
     Promise.all([ticketing.getConcert(id), loadSeats()])
-      .then(([c]) => {
+      .then(([c, list]) => {
         enteredAt.current = Date.now()
         setConcert(c)
+        setSelected((list ?? []).filter((x) => x.heldByMe).map((x) => x.id))
         track('VIEW_CONCERT', { concertId: id })
         track('VIEW_SEATS', { concertId: id })
       })
       .catch((e: Error) => setError(e.message))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userId])
-
-  // 선점 만료 카운트다운
-  useEffect(() => {
-    if (!hold) return
-    const tick = () => {
-      const left = Math.max(0, Math.floor((new Date(hold.expiresAt).getTime() - Date.now()) / 1000))
-      setRemaining(left)
-      if (left === 0) {
-        setHold(null)
-        setSelected([])
-        setNotice('선점 시간이 만료되어 좌석이 반환되었습니다. 다시 선택해 주세요.')
-        loadSeats()
-      }
-    }
-    tick()
-    const t = setInterval(tick, 1000)
-    return () => clearInterval(t)
-  }, [hold, loadSeats])
 
   const selectedSeats = useMemo(() => seats.filter((s) => selected.includes(s.id)), [seats, selected])
   const total = selectedSeats.reduce((sum, s) => sum + s.price, 0)
@@ -93,62 +74,44 @@ export default function ConcertDetailPage() {
     })
   }
 
-  const doHold = async () => {
+  // "예매하기": 좌석을 선점한 뒤 곧바로 결제 화면으로 이동 (별도의 "예매 확정" 단계 없음)
+  const doReserve = async () => {
     if (!userId || !selected.length) return
     setBusy(true)
     setError('')
     try {
       const h = await ticketing.holdSeats(id, userId, selected)
-      setHold(h)
       track('HOLD_SEAT', { concertId: id, seatIds: selected, elapsedMs: elapsed() })
-      await loadSeats()
+      nav(`/concerts/${id}/payment`, { state: { hold: h } })
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : '좌석 선점에 실패했습니다.'
       setError(msg)
       track('HOLD_FAILED', { concertId: id, seatIds: selected, code: e instanceof ApiError ? e.code : 'UNKNOWN' })
       setSelected([])
       await loadSeats()
-    } finally {
       setBusy(false)
     }
   }
-
-  const doConfirm = async () => {
-    if (!userId || !hold) return
-    setBusy(true)
-    setError('')
-    try {
-      const b = await ticketing.confirmBooking(hold.holdId, userId)
-      track('BOOKING_CONFIRM', { concertId: id, bookingId: b.id, seatIds: b.seatIds, elapsedMs: elapsed() })
-      nav('/my', { state: { justBooked: b.id } })
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : '예매 확정에 실패했습니다.')
-      setHold(null)
-      setSelected([])
-      await loadSeats()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const mm = String(Math.floor(remaining / 60)).padStart(2, '0')
-  const ss = String(remaining % 60).padStart(2, '0')
 
   if (error && !concert) return <p className="error">{error}</p>
-  if (!concert) return <p className="muted">불러오는 중…</p>
 
   return (
     <div className="detail">
       <section className="detail-main">
-        <div
-          className="detail-hero"
-          style={{ background: `hsl(${concert.hue} 60% 38%)` }}
-        >
-          <span className="poster-artist">{concert.artist}</span>
-          <h1>{concert.title}</h1>
-          <p>{dateTime(concert.startAt)} · {concert.venue}</p>
-        </div>
-        <SeatMap seats={seats} selected={selected} onToggle={toggle} disabled={busy} />
+        {concert ? (
+          <div className="detail-hero" style={{ background: `hsl(${concert.hue} 60% 38%)` }}>
+            <span className="poster-artist">{concert.artist}</span>
+            <h1>{concert.title}</h1>
+            <p>{dateTime(concert.startAt)} · {concert.venue}</p>
+          </div>
+        ) : (
+          <div className="detail-hero detail-hero-loading" aria-busy="true" />
+        )}
+        {seats.length > 0 ? (
+          <SeatMap seats={seats} selected={selected} onToggle={toggle} disabled={busy} />
+        ) : (
+          <div className="seatmap seatmap-loading" role="status">좌석 정보를 불러오는 중…</div>
+        )}
       </section>
 
       <aside className="panel">
@@ -170,35 +133,12 @@ export default function ConcertDetailPage() {
           <b>{won(total)}</b>
         </div>
 
-        {hold && (
-          <div className="timer" role="status">
-            선점 유지 시간 <b>{mm}:{ss}</b>
-          </div>
-        )}
         {notice && <p className="notice">{notice}</p>}
         {error && <p className="error" role="alert">{error}</p>}
 
-        {!hold ? (
-          <button className="btn btn-primary btn-block" disabled={!selected.length || busy} onClick={doHold}>
-            {busy ? '처리 중…' : '좌석 선점하기'}
-          </button>
-        ) : (
-          <>
-            <button className="btn btn-primary btn-block" disabled={busy} onClick={doConfirm}>
-              {busy ? '처리 중…' : '예매 확정하기'}
-            </button>
-            <button
-              className="btn btn-ghost btn-block"
-              disabled={busy}
-              onClick={() => {
-                setHold(null)
-                track('BOOKING_CANCEL', { concertId: id, stage: 'HOLD', seatIds: hold.seatIds })
-              }}
-            >
-              좌석 다시 선택
-            </button>
-          </>
-        )}
+        <button className="btn btn-primary btn-block" disabled={!selected.length || busy} onClick={doReserve}>
+          {busy ? '처리 중…' : '예매하기'}
+        </button>
       </aside>
     </div>
   )

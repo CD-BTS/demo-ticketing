@@ -164,3 +164,34 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 .modal h2 { font-size: 18px; margin-bottom: 6px; }
 .qr-box { min-height: 240px; margin: 16px 0 6px; display: grid; place-items: center; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
 .qr-box svg { max-width: 100%; height: auto; }
+
+/* waiting room */
+.waiting { max-width: 520px; margin: 40px auto 0; text-align: center; display: grid; justify-items: center; gap: 10px; }
+.waiting-concert { margin: 0; color: var(--muted); font-size: 15px; }
+.waiting-title { font-size: 44px; font-weight: 700; letter-spacing: -.02em; }
+.waiting-number { margin: 0; font-size: 120px; line-height: 1.05; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+.waiting-behind { margin: 0 0 6px; font-size: 18px; }
+.waiting-behind b { font-variant-numeric: tabular-nums; }
+
+/* payment */
+.pay-wrap { max-width: 860px; margin: 0 auto; }
+.pay-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
+.pay-card { padding: 22px; }
+.pay-card h2 { font-size: 17px; margin-bottom: 12px; }
+.pay-concert { margin: 0 0 4px; font-weight: 700; font-size: 18px; }
+.pay-card .picked { margin-top: 14px; }
+.pay-card .field { margin-top: 18px; }
+.pay-card .field input { letter-spacing: .08em; font-variant-numeric: tabular-nums; }
+.pay-done { max-width: 480px; margin: 24px auto 0; text-align: center; display: grid; justify-items: center; gap: 6px; }
+.pay-done h1 { font-size: 24px; margin: 8px 0 6px; }
+.pay-actions { display: flex; gap: 10px; margin-top: 18px; flex-wrap: wrap; justify-content: center; }
+
+@media (max-width: 860px) {
+  .pay-grid { grid-template-columns: minmax(0, 1fr); }
+  .waiting-title { font-size: 34px; }
+  .waiting-number { font-size: 96px; }
+}
+
+/* seat page skeleton: 대기열 통과 직후 화면 뼈대를 즉시 보여 준다 */
+.detail-hero-loading { background: var(--surface); min-height: 112px; }
+.seatmap-loading { min-height: 340px; display: grid; place-items: center; color: var(--muted); }

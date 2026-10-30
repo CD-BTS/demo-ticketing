@@ -18,11 +18,13 @@ export interface BtsUser {
  * ⚠️ 명세서에 필드 정의가 없음 → 서연(BE)에게 확인 필요. 아래는 가정.
  */
 export type BehaviorEventType =
+  | 'JOIN_QUEUE'
   | 'VIEW_CONCERT'
   | 'VIEW_SEATS'
   | 'SELECT_SEAT'
   | 'HOLD_SEAT'
   | 'HOLD_FAILED'
+  | 'ENTER_PAYMENT'
   | 'BOOKING_CONFIRM'
   | 'BOOKING_CANCEL'
 
