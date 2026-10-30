@@ -12,7 +12,7 @@ export default function Header() {
         </NavLink>
         <nav className="nav">
           <NavLink to="/" end>공연</NavLink>
-          <NavLink to="/my">마이페이지</NavLink>
+          <NavLink to="/my">마이 페이지</NavLink>
         </nav>
         <div className="who">
           <span className="who-id">{userId}</span>

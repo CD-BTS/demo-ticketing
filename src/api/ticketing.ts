@@ -17,6 +17,8 @@ export interface TicketingApi {
   getConcert(id: string): Promise<Concert>
   listSeats(concertId: string, userId: string): Promise<Seat[]>
   holdSeats(concertId: string, userId: string, seatIds: string[]): Promise<SeatHold>
+  /** 선점 해제 (결제 화면에서 '이전으로' 등). 이미 만료/해제됐어도 오류 없이 끝난다. */
+  releaseHold(holdId: string, userId: string): Promise<void>
   confirmBooking(holdId: string, userId: string): Promise<Booking>
   cancelBooking(bookingId: string, userId: string): Promise<Booking>
   listMyBookings(userId: string): Promise<Booking[]>
@@ -171,7 +173,10 @@ const mock: TicketingApi = {
     purge(s)
     const base = soldOut(concertId)
     const booked = new Set([...base, ...(s.booked[concertId] ?? [])])
-    const held = new Set(s.holds.filter((h) => h.concertId === concertId).flatMap((h) => h.seatIds))
+    // 내가 이미 선점해 둔 좌석은 충돌이 아니다 (아래에서 내 기존 선점을 새 선점으로 교체한다)
+    const held = new Set(
+      s.holds.filter((h) => h.concertId === concertId && h.userId !== userId).flatMap((h) => h.seatIds),
+    )
     const conflict = seatIds.filter((id) => booked.has(id) || held.has(id))
     if (conflict.length) {
       save(s)
@@ -189,6 +194,13 @@ const mock: TicketingApi = {
     s.holds.push(hold)
     save(s)
     return hold
+  },
+  async releaseHold(holdId, userId) {
+    await sleep(100)
+    const s = load()
+    // 사용자가 직접 해제한 선점은 '미입금 자동취소'(만료)로 세지 않는다
+    s.holds = s.holds.filter((h) => !(h.holdId === holdId && h.userId === userId))
+    save(s)
   },
   async confirmBooking(holdId, userId) {
     await sleep(400)
@@ -253,6 +265,8 @@ const real: TicketingApi = {
   getConcert: (id) => request('GET', `/concerts/${id}`),
   listSeats: (concertId) => request('GET', `/concerts/${concertId}/seats`),
   holdSeats: (concertId, _u, seatIds) => request('POST', `/concerts/${concertId}/seat-holds`, { seatIds }),
+  // TODO: 선점 해제 API 경로 확정 후 수정 (현재 경로는 가정)
+  releaseHold: (holdId) => request('DELETE', `/seat-holds/${holdId}`),
   confirmBooking: (holdId) => request('POST', '/bookings', { holdId }),
   cancelBooking: (bookingId) => request('POST', `/bookings/${bookingId}/cancel`),
   listMyBookings: () => request('GET', '/bookings/me'),
