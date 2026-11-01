@@ -1,8 +1,25 @@
 # BTS 사용자·이벤트 API 연동 설계
 
-기준일: 2026-11-01. 근거는 사용자가 제공한 **실제 BTS 사용자·이벤트 API 명세**와 현재 FE 코드다. BTS 소스·SQL 파일은 이 저장소에 없으므로 내부 구현/디렉터리 관례를 확인했다고 주장하지 않는다. 확정 계약과 데모 측 신규 설계를 구분하며, 이번 변경은 문서에 한정한다.
+기준일: 2026-11-01. 근거는 사용자가 제공한 **실제 BTS 사용자·이벤트 API 명세**와 FE 코드다. 초기 설계 시에는 BTS 소스가 미확인이었고, 1단계에서 아래 인접 저장소 소스를 추가 확인했다. 확정 계약과 신규 설계를 구분하며 실제 BTS 연동 구현은 아직 하지 않았다.
+
+**1단계 구현 후속:** 인접 `../backend`의 실제 BTS build.gradle, user Controller/Entity/DTO, common 응답/예외, db/schema.sql을 읽기 전용으로 확인했다. 데모 backend는 이 레이어·응답/예외·SQL 수동 관리 컨벤션과 Java/Boot/Gradle 기준을 참고해 조회 API만 구현했다. BTS 소스/DB·인증·Event API는 수정하지 않았고, 이 문서의 매핑/Outbox/metadata 전송은 여전히 후속 설계다. 초기 ‘소스 미확인/문서 한정’ 설명은 이전 설계 시점의 근거를 나타낸다.
+
+**DB 운영 결정:** 데모는 별도 Compose demo-ticketing-mysql / localhost:3308 / demo_ticketing_db / demo_user / demo-ticketing-mysql-data 볼륨을 사용한다. 기존 BTS fairticket-mysql(3307)과 DB·사용자·볼륨을 공유하지 않는다. .env 비밀로 독립 초기화했으며 BTS root 인증 우회/재시도 설정은 제거했다. 조회 API·BTS 서버 간 X-API-Key/DTO·세 이벤트·Outbox 연동 설계는 변경하지 않는다.
 
 관련 문서: [데모 API 명세](api-spec.md), [데모 ERD](erd.md).
+
+## 2단계 구현 상태와 장애 정책
+
+- 구현: 서버가 실제 예매/취소를 commit할 때 각각 BOOKING/CANCEL 원천과 Outbox를 함께 저장한다. 선점·만료·화면 클릭은 보내지 않는다. ticket ID는 생성하지만 검표/CHECK_IN과 QR는 아직 없다.
+- 기존 핵심 8개 테이블을 재사용하고 demo_sessions/outbox_events를 추가했다. DemoUser/ReservationRecords는 JDBC Repository가 매핑하는 도메인 entity record이며 HTTP DTO와 분리했다. 공연 읽기는 기존 JPA 경로를 유지한다.
+- 신규 사용자 공개 ID를 고정 externalUserId로 저장한다. 등록 API는 로컬 데모 세션을 반환하며 BTS 연결이 없어도 사용 가능하다. 전송기는 최초 이벤트 처리 시 POST /users를 serviceId/externalUserId/accountStatus로 호출하고 200/COMMON_200·201/COMMON_201 모두 받아 UUID를 매핑한다. 기존 UUID와 불일치는 자동 변경하지 않는다.
+- BTS_ENABLED=false가 기본이다. 이때 네트워크 호출 없이 PENDING 원천을 보존한다. true이면 BTS_BASE_URL/BTS_SERVICE_ID/BTS_API_KEY가 필요하며 remote URL은 HTTPS(루프백 테스트만 HTTP)를 사용한다. API Key는 .env/런타임에만 있고 브라우저·payload·로그에 넣지 않는다. 실제 발급 service ID는 사용자/이벤트 생성 전에 결정해야 하며 기존 매핑의 namespace를 임의로 바꾸지 않는다.
+- 최종 전송 전 UUID만 결합해 payload를 한 번 만든 뒤 **LONGTEXT + JSON_VALID CHECK**로 보존한다. JSON 컬럼의 출력 정규화와 무관하게 재시도 body bytes를 그대로 유지하려는 선택이며 metadata는 JSON 원형으로 저장한다. externalEventId/발생 시각/metadata는 업무 성공 때 이미 고정된다. 재시도로 재계산하지 않는다.
+- 전송기는 READ COMMITTED 트랜잭션에서 SELECT FOR UPDATE SKIP LOCKED로 같은 serviceId의 due 이벤트를 claim하고 60초 lease/임의 lease token을 부여한다. 네트워크는 로컬 트랜잭션 밖에서 수행한다. 응답 기록도 lease token이 일치할 때만 가능하다. 중단된 IN_FLIGHT는 lease 만료 후 복구한다.
+- 같은 예매에서 앞선 이벤트가 SENT일 때만 뒤의 CANCEL을 전송한다. failed BOOKING을 새 ID로 우회하거나 CANCEL만 앞서 보내지 않는다. 200/COMMON_200·201/COMMON_201은 SENT, 접속/timeout/5xx는 같은 payload로 지수 backoff(2초부터), 최대 8회 시도 후 FAILED. 400/401/403/404/409 등 비재시도 오류는 즉시 FAILED이며 안전한 code만 저장한다. 응답 검증 실패도 격리한다.
+- DB 등록 성공 후 매핑 저장 실패, 서버 저장 후 응답 실패, worker 중단 모두 같은 사용자 외부 ID/이벤트 ID로 복구한다. 운영 재처리가 필요하면 원인과 기존 BTS 레코드를 확인한 후 같은 payload/ID를 유지한 채 상태를 재개해야 한다. 자동 key 교체·UUID 초기화·새 ID 우회·BTS DB 직접 수정은 하지 않는다. 공개 관리 API는 없다.
+- paymentIdentifier는 허용된 테스트 식별자, ipAddress는 연결 peer에서 산출한다. Forwarded/X-Forwarded-For를 전부 무시하도록 설정했다(현재 신뢰 프록시 구성이 없음). duration은 해당 hold 생성~서버 확정의 소수 초이며 occurredAt은 UTC 초 단위 Z다. JVM 기본 시간대가 KST여도 JDBC LocalDateTime으로 UTC DATETIME 원천을 읽는다.
+- 실제 BTS 환경의 URL·발급 키·service ID는 현재 별도 설정이 필요하다. 전용 HTTP 계약 서버를 이용한 등록·멱등 성공·저장 후 503·409·동일 payload 재시도와 접속 거절을 검증한다. 이 검증을 실제 BTS 인스턴스의 이벤트 수신 확인으로 표현하지 않는다. BTS Feature 추출은 여전히 별도 레포의 후속 작업이다.
 
 **확정된 연동 방식:** eventType은 BOOKING/CANCEL/CHECK_IN을 유지하고 Feature 원천 데이터는 metadata로 전달한다. 데모는 업무 사실과 원천값만 제공하며 Feature 계산은 BTS가 담당한다. 아래 4.5절의 metadata 수집 프로필은 이 결정에 따른 설계이며, BTS Event API의 기존 필수 필드/인증/시간/멱등성 계약을 변경하지 않는다. 추가 metadata를 저장할 수 있다는 것과 기존 Feature 추출기가 이를 읽는다는 것은 별개다.
 
@@ -259,7 +276,7 @@ Event API의 세 enum과 저장 계약은 유지한다. **BTS 저장 성공만�
 - common의 ApiResponse, ApiException, GlobalExceptionHandler를 사용하고 별도 성공 envelope/예외 체계를 BTS에 만들지 않는다. FE ApiEnvelope는 TypeScript 타입 이름일 뿐 Java에 동명 클래스를 새로 만들 근거가 아니다.
 - 데모 구현도 기존 레이어/DTO/예외 처리 관례에 맞추되 BTS 소스·Entity·Repository를 복제하거나 DB를 직접 조회하지 않는다. 실제 패키지명/DTO 구성/SQL 파일 경로·버전/실행 규칙은 구현 전 BTS 소스에서 확인할 항목이다.
 - SQL은 기존 관리 방식과 명명·추가 스크립트 규칙을 유지한다. 데모용 schema/outbox 변경은 데모 DB에 한정한다. 기존 테이블 재생성·초기화·BTS DATETIME 변경·기존 사용자/Credit 수정·새 migration 도구 도입을 이번 문서로 승인하지 않는다.
-- 제공된 BTS 검증 명령은 `./gradlew.bat build`, DB_*와 테이블 준비 후 `./gradlew.bat mysqlTest --rerun-tasks`다. 이 저장소 backend는 비어 있으므로 실행하지 않는다.
+- 제공된 BTS 검증 명령은 `./gradlew.bat build`, DB_*와 테이블 준비 후 `./gradlew.bat mysqlTest --rerun-tasks`다. BTS 자체 테스트는 실행하지 않았다. 데모는 별도 3308 DB에서 build/MVC 7개·MySQL 통합 3개·실 HTTP 13건 검증을 완료했다. 이벤트 전송은 아직 미구현이며 이번 조회 검증으로 BTS 연동 성공을 주장하지 않는다.
 - 실제 구현 단계에서는 인증/검증/접근 범위/status·code·message, 등록 원자성·동시 등록, 이벤트 세 종류·JSON/UTC·멱등/충돌·동시 요청을 검증한다. 기존 롤백 테스트를 유지하고 테스트 실행별 임의 서비스 데이터를 사용한다. 정리는 이벤트→해당 사용자/Credit 순으로 테스트 소유 행만 대상으로 하며 기존 데이터·스키마·Docker 볼륨을 초기화하지 않는다. AUTO_INCREMENT 소비는 허용될 수 있다.
 
 ## 7. 불일치·추가 개발 목록

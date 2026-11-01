@@ -1,6 +1,21 @@
 # 데모 티켓팅 ERD 설계안
 
-작성일: 2026-11-01. [API 명세 및 프론트엔드 분석](api-spec.md) 7.2절의 테이블 제안을 관계도로 보완한다. **모든 테이블·관계·제약은 신규 설계 제안**이며 실제 DB나 JPA 코드는 생성하지 않았다. FE에서 확인한 타입이 DB 설계의 출발점이며, 아래 구조가 기존 BTS DB 구조라는 뜻은 아니다.
+작성일: 2026-11-01. [API 명세 및 프론트엔드 분석](api-spec.md) 7.2절의 데모 테이블 설계를 관계도로 보완한다. 초기에는 모두 설계 제안이었으며 현재 생성한 SQL/조회 Entity와 미구현 부분은 아래 1단계 상태로 구분한다. FE 타입이 출발점이며 아래 구조가 기존 BTS DB 구조라는 뜻은 아니다.
+
+**1단계 후속 상태:** [backend/db/schema.sql](../backend/db/schema.sql)의 핵심 8개 테이블을 전용 Compose demo-ticketing-mysql(localhost:3308, demo_user, demo-ticketing-mysql-data 볼륨)의 demo_ticketing_db에 적용했다. 공연 3개·좌석 288개 및 SQL 재실행 시 중복 없음을 검증했다. concerts/concert_seats 조회 Entity만 구현했으며 사용자·선점·예매·티켓 테이블은 비어 있다. 세션·대기열·QR 자격증명·Outbox는 후속 단계다. 기존 BTS 컨테이너/볼륨과 분리했다. 상세는 [실행 안내](../backend/README.md) 참조.
+
+seed는 c1/c2/c3·공연별 96석, 모두 AVAILABLE, VIP/R/S 154000/132000/99000원, priceFrom=99000원으로 정합성을 맞춘다. 종료 시각은 시작+3시간의 fixture 제안이다. 기존 데이터는 갱신/초기화하지 않는다. SQL은 공개 ID·외부 ID의 길이와 FK 제약을 명시하며, 구현하지 않은 교차 테이블 공연/소유권 검증은 추후 Service 책임이다.
+
+**2단계 구현:** [02-booking-support.sql](../backend/db/02-booking-support.sql)로 demo_sessions/outbox_events를 추가해 총 10개 테이블을 사용한다. 기존 hold/booking/item/ticket/점유 컬럼을 재사용하며 초기화나 기존 테이블 재작성은 하지 않는다. 선점·예매·취소·소유권 검증을 Service/트랜잭션에 구현했고 CHECK_IN/QR/대기열은 아직 없다. 아래 일반 설계와 실제 선택이 다르면 이 상태를 우선한다.
+
+| 실제 추가 테이블 | 구현 필드/제약 |
+|---|---|
+| demo_sessions | id PK, user_id FK, token_hash CHAR(64) ascii_bin UNIQUE, expires_at DATETIME(6), expiry INDEX. 원문 token 미저장, 24시간 세션 |
+| outbox_events | id PK, user_id FK, service_id/external_event_id 복합 UNIQUE, business_transition_id/event_type 복합 UNIQUE, aggregate_id, event_type, occurred_at_utc, metadata JSON, payload LONGTEXT(JSON_VALID CHECK), delivery_status, lease_token, locked_until, retries, next_attempt_at, bts_event_id BIGINT, last_error_code, created_at, sent_at |
+
+Outbox 상태는 PENDING/IN_FLIGHT/RETRY/SENT/FAILED다. payload NULL인 PENDING/RETRY는 사용자 매핑을 기다리는 원천이며 최초 전송 전 UUID를 결합한 뒤 payload는 불변이다. 타임아웃/worker 중단도 동일 ID와 body로 재전송한다. 같은 aggregate의 순서를 지키고 claim lease와 조건부 결과 갱신을 사용한다. 기존 ‘payload JSON’ 제안과 달리 최종 body를 LONGTEXT로 저장하는 이유는 JSON 출력 재정규화 없이 bytes를 유지하기 위함이다.
+
+좌석 쓰기는 공연 행을 잠근 뒤 수행한다. 같은 사용자·공연의 ACTIVE hold는 이 잠금 아래 한 개로 유지하며 일부 좌석만 성공하는 교체는 없다. 동일 hold 확정은 bookings.hold_id UNIQUE와 상태 재조회로 수렴한다. 입장 티켓은 확정 시 좌석별 생성되고 취소 시 무효화한다. 별도 QR credential 테이블은 아직 없다. 신규 도메인 record는 명시적 JDBC Repository 매핑을 사용하며 API DTO로 직접 반환하지 않는다.
 
 ## 1. 범위와 전제
 
@@ -304,4 +319,4 @@ QR 갱신 시 이전 토큰 유효 기간·겹침 허용·원문 복원/재발�
 7. SQL은 기존 BTS 관리 컨벤션에 맞춰 별도 데모 DB용으로 준비하되 실제 파일 경로/명명·적용 규칙을 소스에서 확인한 뒤 확정. 새 도구 도입·기존 테이블 초기화·BTS 스키마 수정은 이번 범위가 아님.
 8. IP 신뢰 프록시 CIDR/hop과 정규화, 테스트 paymentIdentifier 목록, 서버 시작/종료 시각 검증, metadata 추출기의 누락/지연 처리. BTS의 Feature 조회는 데모 DB를 직접 참조하지 않음.
 
-문서 검토에서는 API 필드 매핑, PK/FK 및 관계 수, 취소 후 재판매와 이력 보존, 선택 테이블의 범위를 확인했다. Mermaid 렌더러를 실행하거나 DB에 DDL을 적용한 결과는 아니며 구현 시 스키마·경쟁 테스트가 필요하다.
+문서 검토에서는 API 필드 매핑, PK/FK 및 관계 수, 취소 후 재판매와 이력 보존, 선택 테이블 범위를 확인했다. 핵심 DDL의 PK/FK/UNIQUE/CHECK와 인덱스가 MySQL에 생성됐고 조회 통합 테스트가 통과했다. Mermaid 렌더러 검증 및 향후 예매/선점 경쟁 테스트는 별도다.

@@ -1,6 +1,43 @@
 # 데모 티켓팅 프론트엔드 분석 및 백엔드 설계
 
-작성일: 2026-11-01. 범위: 현재 `frontend/` 코드 분석, API 계약 초안, Spring Boot / Java 17 / Gradle / MySQL 설계. 백엔드 구현은 포함하지 않는다.
+작성일: 2026-11-01. 범위: FE 분석과 백엔드 설계 및 구현. 현재 계약은 아래 **2단계 예매 구현**과 [backend 실행 안내](../backend/README.md)를 우선 적용한다. 이후의 초기 FE 분석·가정은 현재 코드와 비교하기 위한 기록이다.
+
+### 2단계 예매 구현
+
+공연/좌석 공개 조회를 유지하고 선점·확정·취소·본인 내역·데모 세션을 추가했다. 실제 카드 승인/환불, Redis 대기열, QR 발급/검표, CHECK_IN 전송은 이번 구현에 포함하지 않는다. BTS는 서버 전용 X-API-Key로 호출하며 브라우저의 기존 9종 /events 신호는 중계하지 않는다.
+
+| API | 인증/요청 | 정상 응답 |
+|---|---|---|
+| POST /api/v1/users | 데모 ID `{"userId":"demo_user01"}`. 영문/숫자/_/- 3~30자 | 200/COMMON_200, data={userId,token,expiresAt} |
+| POST /api/v1/concerts/{concertId}/seat-holds | Bearer, `{"seatIds":["A-01","A-02"]}` | 201/COMMON_201, 기존 SeatHold DTO |
+| DELETE /api/v1/seat-holds/{holdId} | Bearer, body 없음 | 200/COMMON_200, data:null |
+| POST /api/v1/bookings | Bearer, `{"holdId":"h_...","paymentIdentifier":"test-pay-shared-01"}` | 최초 201/COMMON_201, 동일 hold 재요청 200/COMMON_200, 기존 Booking DTO |
+| POST /api/v1/bookings/{bookingId}/cancel | Bearer, body 없음 | 200/COMMON_200, CANCELLED Booking. 재취소도 같은 결과 |
+| GET /api/v1/bookings/me | Bearer, query/body 없음 | 200/COMMON_200, 본인 Booking[] 생성 역순 |
+| GET /api/v1/concerts/{concertId}/seats | 공개 가능, Bearer가 있으면 검증·본인 선점 표시 | 기존 Seat[]; 유효한 본인 HELD만 heldByMe=true |
+
+세션은 서버가 무작위 token을 발급하고 SHA-256 hash만 DB에 저장하며 24시간 유효하다. ID 재입력으로 같은 데모 신원을 시작할 수 있는 **공유 데모 식별 방식**이지 실사용 계정의 소유권 인증은 아니다. 실서비스 공개 전 별도 사용자 인증이 필요하다. Bearer 누락/불량/중복 헤더/만료는 401/UNAUTHORIZED, 타인의 hold/booking은 403/FORBIDDEN. userId를 요청 body로 보내 소유권을 바꿀 수 없다. token은 BTS UUID/API Key와 별개다. POST /users는 로컬 세션 시작이며 BTS 등록·매핑은 전송기에서 수행한다.
+
+선점은 최대 4석, 중복 코드 금지. 기본 5분(HOLD_DURATION)이며 같은 사용자·공연의 동일 선택 재요청은 같은 hold와 만료를 유지한다. 변경 요청은 원자적으로 기존 선점을 교체하고 실패 시 기존 것을 유지한다. 없는 좌석 404/SEAT_NOT_FOUND, 중복/빈/5석 이상은 400(중복은 INVALID_SEAT_SELECTION, DTO 검증은 INVALID_REQUEST), 타인 선점·예매 충돌은 409/SEAT_ALREADY_TAKEN이다.
+
+만료는 expires_at <= 서버 현재 시각. 새 선점 시 해당 공연의 만료 hold를 정리하고 5초 주기 작업도 상태를 복구한다. 좌석 조회는 정리 작업이 지연돼도 만료된 HELD를 AVAILABLE로 표시한다. 만료/해제 hold 확정은 410/HOLD_EXPIRED이며 BOOKING/CANCEL 이벤트를 만들지 않는다. 없는 hold 해제/반복 해제도 200이며 타인의 존재하는 hold는 403이다.
+
+paymentIdentifier는 기본 test-pay-shared-01/02/03 중 하나(TEST_PAYMENT_IDENTIFIERS 설정)이며 누락/형식 오류/미허용 값은 400/INVALID_REQUEST다. 동일 hold가 이미 확정됐으면 기존 Booking을 반환하고 새 IP/시각/결제 식별자로 변경하거나 새 이벤트를 생성하지 않는다. 총액은 선점 item snapshot에서 서버가 계산한다. 취소된 hold의 재확정도 기존 CANCELLED Booking을 반환한다. 부분 취소/실제 PG 처리는 없다.
+
+모든 쓰기 연산은 동일 공연 행의 SELECT FOR UPDATE를 먼저 획득한 후 트랜잭션 안에서 현재 상태를 재조회한다. 이 공연 단위 직렬화와 hold_id UNIQUE로 다른 사용자/다중 인스턴스의 이중 선점·확정을 막는다. 높은 부하에서는 좌석별 잠금으로 세분화할 후속 여지가 있다. 예매/좌석/티켓/Outbox 저장 중 하나라도 실패하면 전부 롤백된다. 재취소는 이미 재판매된 좌석을 해제하지 않는다.
+
+BTS 장애 정책: 예매·취소와 같은 트랜잭션에 이벤트 원천을 저장하고, 네트워크는 별도 전송기가 처리한다. BTS 실패로 성공한 로컬 예매를 취소하거나 예매 API에 upstream 인증 401을 반환하지 않는다. BTS_ENABLED=false(기본)이면 이벤트는 PENDING으로 보존되며 전송하지 않는다. 실제 연결에는 발급받은 서비스 설정이 필요하다. 상세 재시도·불변 payload·운영 복구는 [BTS 연동 설계](bts-integration.md)의 2단계 구현 절을 따른다.
+
+현재 frontend는 token 응답을 저장하지 않고 paymentIdentifier도 보내지 않으므로 AuthContext/client와 PaymentPage/ticketing 입력 연동이 후속으로 필요하다. 이번 작업에서 FE 코드는 수정하지 않는다. GET /users/{id} 상세 facade와 POST /events 텔레메트리는 아직 구현하지 않았다.
+
+### 1단계 구현 당시 상태(이력)
+
+- 구현: GET /api/v1/concerts, GET /api/v1/concerts/{concertId}, GET /api/v1/concerts/{concertId}/seats. MySQL Repository 조회, COMMON_200 envelope, 경로 검증과 공통 예외 처리.
+- 이번 단계 결정: 인증/대기열 없이 조회 허용. 아래 기존 ‘인증 필수 제안’은 아직 적용하지 않았다. heldByMe는 항상 false이며 상태 자체는 DB에서 읽는다.
+- Java 17 / Spring Boot 4.1.1 / Gradle 9.7.1. 실제 인접 BTS 소스의 레이어·record DTO·common 응답/예외·db/schema.sql 방식을 참고했다. Flyway 없이 ddl-auto=none.
+- DB는 독립 Compose의 demo-ticketing-mysql(MySQL 8.0, localhost:3308, demo_user, 별도 demo-ticketing-mysql-data 볼륨)로 전환했다. 핵심 8개 테이블·공연 3개·좌석 288개를 적용하고 schema/seed 재실행의 중복 방지도 확인했다. 기존 BTS 컨테이너(3307)는 유지한다.
+- Gradle build, MVC 7개·MySQL 통합 3개 테스트와 실제 HTTP 13건 검증 완료. 조회는 200, 예매/선점은 아직 미구현으로 404임을 확인했다. 앱은 8080에서 3308 DB에 연결한다. API/DTO 및 BTS 연동 계약은 그대로 유지한다.
+- frontend 및 BTS 소스는 수정하지 않았다. 사용자·선점·예매·취소·대기열·QR·BTS 전송은 구현하지 않았다.
 
 ## 1. 근거와 명세의 확정 수준
 
@@ -11,7 +48,7 @@
 - **[BTS 확정]** 사용자가 제공한 실제 사용자·이벤트 API 명세에 따른 서버 간 계약이다. [BTS 연동 설계](bts-integration.md)에 상세 계약과 오류·시간·재시도 규칙을 기록한다.
 - **[연동 결정]** eventType은 BOOKING/CANCEL/CHECK_IN 유지. Feature 원천은 metadata로 전달하며 데모는 Feature를 계산하지 않는다. metadata 키·소요 시간 경계·관람 단위의 구체안은 연동 결정과 구별해 설계안으로 표시한다.
 
-분석 대상: `src/api/` 5개 파일, `auth/AuthContext.tsx`, `pages/` 7개 파일, `hooks/useBehavior.ts`, `components/` 5개 파일, `risk/` 2개 파일, `App.tsx`, `main.tsx`, `styles.css`, `index.html`, `.env.example`, `package.json` 및 잠금 파일, TypeScript/Vite 설정. 잠금 파일은 의존성 자료이며 API 계약의 근거로 사용하지 않았다. 루트 README도 대조했다. 현재 `backend/`는 비어 있다. 별도 BTS 레포지토리나 주석에 언급된 외부 명세서·Notion·PDF는 확인하지 않았다.
+초기 FE 분석 대상: `src/api/` 5개 파일, `auth/AuthContext.tsx`, `pages/` 7개 파일, `hooks/useBehavior.ts`, `components/` 5개 파일, `risk/` 2개 파일, `App.tsx`, `main.tsx`, `styles.css`, `index.html`, `.env.example`, `package.json` 및 잠금 파일, TypeScript/Vite 설정. 잠금 파일은 의존성 자료이며 API 계약의 근거로 사용하지 않았다. 루트 README도 대조했다. 당시 backend는 비어 있었으며 이후 1단계 구현을 추가했다. BTS 소스는 1단계에서 인접 저장소를 확인했고 외부 Notion/PDF 원문은 확인하지 않았다.
 
 `bts.ts` 주석의 “구현 완료”와 별개로, 확보한 실제 BTS 명세는 현재 FE 요청과 일치하지 않는다. 사용자 등록은 serviceId/externalUserId, 사용자 식별은 반환 UUID, 인증은 서버 간 X-API-Key이며 이벤트는 BOOKING/CANCEL/CHECK_IN만 허용한다. 티켓팅·대기열 경로는 여전히 FE 가정이다. **4절은 브라우저→데모 계약**, 실제 **데모→BTS 계약은 [BTS 연동 설계](bts-integration.md)**로 분리한다.
 
@@ -154,6 +191,8 @@
 
 ### 4.4 공연 목록: GET `/api/v1/concerts`
 
+**[1단계 구현]** 아래 FE 응답 형식을 유지한다. 인증 없이 조회, 성공 HTTP 200/COMMON_200. 공연 시작 시각→공개 ID 순으로 정렬한다.
+
 - **[FE 가정]** `api/ticketing.ts:real.listConcerts`.
 - 사용 파일: `pages/ConcertListPage.tsx`.
 - 인증: 우선 필수 제안(현재 UI는 로그인 후 표시). 공개 여부는 협의.
@@ -167,6 +206,8 @@
 
 ### 4.5 공연 상세: GET `/api/v1/concerts/{concertId}`
 
+**[1단계 구현]** 인증 없이 조회, 200/COMMON_200. 없는 공연 404/CONCERT_NOT_FOUND. concertId 공백/50자 초과는 400/INVALID_REQUEST(data.errors). DB UTC 시각을 오프셋 포함 문자열로 반환한다.
+
 - **[FE 가정]** `api/ticketing.ts:real.getConcert`.
 - 사용 파일: `pages/WaitingRoom.tsx`, `pages/ConcertDetailPage.tsx`, `pages/PaymentPage.tsx`.
 - 인증: 필수 제안.
@@ -179,6 +220,8 @@
 - Status: 200 제안. **Mock 확인:** 404 `CONCERT_NOT_FOUND`.
 
 ### 4.6 좌석 목록: GET `/api/v1/concerts/{concertId}/seats`
+
+**[1단계 구현]** 인증/대기열 검증 없이 조회, 200/COMMON_200. 공연 미존재는 상세와 같은 404. 행→좌석 번호 순 정렬, heldByMe=false. 이후 선점 단계에서 본인 판정을 추가한다. 403/QUEUE_NOT_ADMITTED는 아직 설계 제안이다.
 
 - **[FE 가정]** `api/ticketing.ts:real.listSeats`.
 - 사용 파일: `pages/ConcertDetailPage.tsx`, `pages/PaymentPage.tsx`; `components/SeatMap.tsx`는 표시만 담당.
