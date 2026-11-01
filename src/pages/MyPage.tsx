@@ -6,8 +6,10 @@ import { ticketing } from '../api/ticketing'
 import type { AccountRisk, Booking } from '../api/types'
 import { useAuth } from '../auth/AuthContext'
 import { dateTime, won } from '../components/format'
+import CardManager from '../components/CardManager'
 import QrModal from '../components/QrModal'
 import { useBehavior } from '../hooks/useBehavior'
+import { FEATURE_SPECS, formatFeature } from '../risk/features'
 
 export default function MyPage() {
   const { userId } = useAuth()
@@ -63,32 +65,48 @@ export default function MyPage() {
       <div className="account">
         <span>
           계정 등급{' '}
-          <b className={risk ? `grade grade-${risk.grade}` : ''}>{risk ? risk.grade : '—'}</b>
+          <b className={risk ? `grade grade-${risk.gradeCode}` : ''}>{risk ? risk.grade : '—'}</b>
           {risk && <span className="account-sub"> (신용 {risk.credit}점)</span>}
         </span>
-        <span>의심 점수 <b>{risk ? risk.suspicionScore : '—'}</b></span>
+        <span>의심 점수 <b>{risk ? risk.dynamicPenalty : '—'}</b></span>
       </div>
       {risk && (
         <details className="account-detail">
           <summary>산정 내역 보기</summary>
           <ul>
-            <li><span>기본 신뢰도</span><b>{risk.baseCredit}</b></li>
+            <li><span>기본 신뢰도 (base_credit)</span><b>{risk.baseCredit}</b></li>
             {risk.penalties.map((p) => (
               <li key={p.key} className={p.points ? 'is-hit' : ''}>
                 <span>{p.label}</span>
                 <b>{p.points ? `−${p.points}` : '0'}</b>
               </li>
             ))}
-            <li className="sum"><span>신용 점수 (기본 − 감점 합계 {risk.suspicionScore})</span><b>{risk.credit}</b></li>
+            <li className="sum"><span>감점 합계 (dynamic_penalty = 의심 점수)</span><b>{risk.dynamicPenalty}</b></li>
+            <li className="sum"><span>신용 점수 (credit_score)</span><b>{risk.credit}</b></li>
+            <li><span>적용 정책 (penalty_policy)</span><b>{risk.policy}</b></li>
+          </ul>
+
+          <h3 className="feature-title">행동 지표 (Feature)</h3>
+          <ul className="features">
+            {FEATURE_SPECS.map((f) => (
+              <li key={f.key} title={`${f.definition} · 기준 후보 ${f.candidates}`}>
+                <span>
+                  {f.label} <code>{f.key}</code>
+                </span>
+                <b className={f.source === 'server' ? 'is-server' : ''}>{formatFeature(risk.features, f.key)}</b>
+              </li>
+            ))}
           </ul>
           <p className="small muted">
-            현재는 브라우저에서 측정 가능한 항목만 반영한 참고값입니다. AI 이상 점수, 카드·IP 집계, 관람·노쇼 이력은
-            서버 연동 후 반영됩니다.
+            브라우저에서 측정 가능한 지표만 반영한 참고값입니다. AI 이상 점수, 카드·IP 집계, 관람·노쇼 이력은 서버 연동 후
+            반영됩니다. 적용 정책(CAPTCHA, 대기열 후순위)은 정책 표시만 하며 아직 화면에 적용되지는 않습니다.
           </p>
         </details>
       )}
       {justBooked && <p className="notice">예매가 완료되었습니다.</p>}
       {error && <p className="error" role="alert">{error}</p>}
+
+      {userId && <CardManager userId={userId} />}
 
       <h2 className="section-title">예매 내역</h2>
       {!bookings ? (

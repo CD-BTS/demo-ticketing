@@ -7,7 +7,7 @@ import { useAuth } from '../auth/AuthContext'
 import { dateTime, won } from '../components/format'
 import SeatMap from '../components/SeatMap'
 import { useBehavior } from '../hooks/useBehavior'
-import { recordSeatClick } from '../risk/signals'
+import { recordRequest, recordStay } from '../risk/signals'
 
 const MAX_SEATS = 4
 
@@ -52,6 +52,15 @@ export default function ConcertDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, userId])
 
+  // 좌석 화면 체류 시간(step_stay_time): 배치도 로딩 완료 ~ 화면을 떠날 때
+  useEffect(() => {
+    if (!userId) return
+    return () => {
+      const sec = (Date.now() - enteredAt.current) / 1000
+      if (sec >= 0.2) recordStay(userId, 'seat_select', sec) // 개발 모드의 즉시 재마운트는 제외
+    }
+  }, [userId])
+
   const selectedSeats = useMemo(() => seats.filter((s) => selected.includes(s.id)), [seats, selected])
   const total = selectedSeats.reduce((sum, s) => sum + s.price, 0)
 
@@ -68,7 +77,7 @@ export default function ConcertDetailPage() {
       if (userId) {
         const first = !firstSelectDone.current
         firstSelectDone.current = true
-        recordSeatClick(userId, Date.now(), first ? elapsed() / 1000 : undefined)
+        recordRequest(userId, 'select', Date.now(), first ? elapsed() / 1000 : undefined)
       }
       return [...prev, seat.id]
     })
@@ -79,6 +88,7 @@ export default function ConcertDetailPage() {
     if (!userId || !selected.length) return
     setBusy(true)
     setError('')
+    recordRequest(userId, 'attempt') // 예매 시도(recent_booking_count)
     try {
       const h = await ticketing.holdSeats(id, userId, selected)
       track('HOLD_SEAT', { concertId: id, seatIds: selected, elapsedMs: elapsed() })
