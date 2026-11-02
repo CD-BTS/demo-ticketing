@@ -95,5 +95,7 @@ export interface TicketQr {
   refreshIntervalSec?: number
 }
 
-// ---- 계정 등급 / 의심 점수 (산식: src/risk/credit.ts) ----
-export type { CreditResult as AccountRisk } from '../risk/credit'
+// ---- 계정 등급 / 의심 점수 (산식: src/risk/credit.ts, Feature: src/risk/features.ts) ----
+import type { CreditResult } from '../risk/credit'
+import type { BehaviorFeatures } from '../risk/features'
+export type AccountRisk = CreditResult & { features: BehaviorFeatures }

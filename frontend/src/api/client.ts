@@ -45,6 +45,9 @@ export async function request<T>(
     /* 본문이 JSON이 아닌 경우 */
   }
 
+  // 세션 만료(24h)·잘못된 토큰: 낡은 토큰을 버려 공개 조회(공연·좌석)는 계속 되게 한다. 쓰기는 다시 로그인 필요.
+  if (res.status === 401 && token) tokenStore.clear()
+
   if (!res.ok || !json || !json.success) {
     throw new ApiError(
       json?.code ?? `HTTP_${res.status}`,

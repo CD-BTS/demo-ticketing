@@ -144,10 +144,9 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 .account b { color: var(--text); }
 .account-sub { font-size: 12px; }
 .grade { padding: 2px 8px; border-radius: 999px; font-size: 13px; }
-.grade-우수 { background: rgba(60,136,158,.16); color: var(--ok) !important; }
-.grade-안전 { background: rgba(0,107,209,.12); color: var(--accent) !important; }
-.grade-주의 { background: rgba(255,75,15,.12); color: var(--warn) !important; }
-.grade-위험 { background: rgba(255,0,0,.12); color: var(--danger) !important; }
+.grade-NORMAL { background: rgba(60,136,158,.16); color: var(--ok) !important; }
+.grade-SUSPICIOUS { background: rgba(255,75,15,.12); color: var(--warn) !important; }
+.grade-HIGH_RISK { background: rgba(255,0,0,.12); color: var(--danger) !important; }
 .account-detail { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
 .account-detail summary { cursor: pointer; width: max-content; }
 .account-detail ul { list-style: none; margin: 8px 0; padding: 10px 12px; max-width: 460px; background: var(--surface); border-radius: 10px; display: grid; gap: 6px; }
@@ -195,3 +194,33 @@ h1, h2, h3 { margin: 0; line-height: 1.25; }
 /* seat page skeleton: 대기열 통과 직후 화면 뼈대를 즉시 보여 준다 */
 .detail-hero-loading { background: var(--surface); min-height: 112px; }
 .seatmap-loading { min-height: 340px; display: grid; place-items: center; color: var(--muted); }
+
+/* feature list (my page) */
+.feature-title { font-size: 14px; margin: 14px 0 0; color: var(--text); }
+.account-detail ul.features li { align-items: baseline; }
+.account-detail ul.features code { font-size: 11px; color: var(--muted); margin-left: 4px; }
+.account-detail ul.features b.is-server { color: var(--muted); font-weight: 400; }
+
+/* card manager (my page) */
+.cards-section { margin-top: 8px; }
+.cards-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.cards-head .section-title { margin: 20px 0 10px; }
+.saved-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; max-width: 460px; }
+.saved-cards li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.masked { color: var(--muted); font-variant-numeric: tabular-nums; letter-spacing: .05em; }
+.card-form { margin-top: 12px; max-width: 460px; padding: 16px; background: var(--surface); border-radius: var(--radius); display: grid; gap: 4px; }
+.card-form .field { margin: 6px 0 4px; }
+.card-form .btn { margin-top: 10px; justify-self: start; }
+
+/* payment method list */
+.pay-hint { margin: 10px 0 8px; }
+.card-list { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 8px; }
+.card-row { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; font: inherit; color: var(--text); text-align: left; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; transition: border-color .15s, background .15s; }
+.card-row:hover:not(:disabled) { border-color: var(--accent); background: #f4f9ff; }
+.card-row:disabled { opacity: .5; cursor: not-allowed; }
+.card-row:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+.card-row-main { display: inline-flex; align-items: baseline; gap: 10px; }
+.card-row-act { color: var(--accent); font-weight: 500; font-size: 14px; white-space: nowrap; }
+.card-row-direct { border-style: dashed; }
+.direct-form { margin-top: 8px; padding: 14px 16px 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; }
+.direct-form .field { margin-top: 0; }
