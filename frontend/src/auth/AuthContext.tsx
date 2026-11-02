@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react'
 import { registerUser } from '../api/bts'
+import { tokenStore } from '../api/client'
 
 const USER_KEY = 'fds.userId'
 
@@ -32,6 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const logout = useCallback(() => {
+    tokenStore.clear()
     try {
       localStorage.removeItem(USER_KEY)
     } catch {

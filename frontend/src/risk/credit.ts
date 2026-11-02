@@ -1,69 +1,80 @@
 /**
- * BTS Credit(신용 점수) / 의심 점수 산출.
- * 출처: Notion "교수님 피드백 2차" — "Credit + Isolation Forest 감점 요인 통합본" 중 최종 "수정된 표".
+ * BTS Credit(신용 점수) 산출.
+ * 출처: "Credit 기준 및 산출 방식" (Credit 산출 및 사용자 등급별 제재 정책)
  *
- *   Credit_final = max(0, BaseCredit − DynamicPenalty)
- *   BaseCredit   = 100 × (A + α) / (A + 2.0·N + 1.5·Cauto + α + β)      (α = β = 5)
- *   DynamicPenalty = P_IF + P_card + P_ip + P_speed + P_variance
+ *   Credit_final   = max(0, BaseCredit − DynamicPenalty)
+ *   BaseCredit     = 100 × (A + α) / (A + N + Cauto + α + β)          α = β = 5, A·N·Cauto 는 가중치 반영 값
+ *   DynamicPenalty = P_IF + P_Rule
+ *   P_IF           = S_anomaly(0~1) × 40                               (최대 40점, 실험 후보 20/30/40)
+ *   P_Rule         = 카드 + IP + 좌석 선택 속도 + 요청 간격 분산      (최대 30점)
  *
- * ⚠️ 감점 가중치는 PDF에서 "실험으로 선정할 후보값"이라고 되어 있다.
- *    확정되면 아래 CREDIT_PARAMS 만 고치면 된다.
- * ⚠️ 등급 구간(GRADE_TIERS)과 "의심 점수 = DynamicPenalty" 정의는 PDF에 명시가 없어 임시로 정한 값이다.
+ * ⚠️ 감점 가중치·등급 임계값(40, 20)은 문서상 "초기 정책값이며 실험 결과에 따라 변경"된다.
+ *    확정되면 CREDIT_PARAMS / GRADE_TIERS 만 고치면 된다.
  */
 
 export const CREDIT_PARAMS = {
   alpha: 5,
   beta: 5,
-  noShowWeight: 2.0, // 노쇼 1건 = 2.0
-  autoCancelWeight: 1.5, // 선점 후 미입금 자동 취소 1건 = 1.5
+  attendedWeight: 1.0, // 정상 관람 완료 ×1.0
+  noShowWeight: 2.0, // 노쇼 ×2.0
+  autoCancelWeight: 1.5, // 미입금 자동 취소 ×1.5  (일반 취소는 감점하지 않음)
   ifMaxPenalty: 40, // P_IF = S_anomaly × 40
-  card: { strong: { min: 4, points: 15 }, weak: { min: 2, points: 5 } }, // 최근 30일 동일 카드 연결 계정 수
-  ip: { strong: { min: 5, points: 5 } }, // 동일 IP 최근 10분 내 예매 시도 수
-  speed: { belowSec: 1.0, points: 5 }, // 좌석 선택 소요 시간(초)
-  variance: { belowSec2: 1.0, points: 5, minRequests: 5 }, // 클릭 간격 분산(초²), 최근 5회 이상 요청 기준
+  card: { strong: { min: 4, points: 15 }, weak: { min: 2, points: 5 } }, // 동일 카드 공유 계정 수 (card_reuse_count)
+  ip: { strong: { min: 5, points: 5 } }, // 동일 IP 최근 10분 예매 시도 수 (ip_booking_density)
+  speed: { belowSec: 1.0, points: 5 }, // 좌석 선택 소요 시간 (seat_selection_latency)
+  variance: { belowSec2: 1.0, points: 5, minRequests: 5 }, // 요청 간격 분산 (booking_interval_variance), 최근 5회 이상 요청 기준
 } as const
 
-/** 임시 등급 구간 (PDF 예시: 70점=우수, 45점=안전/경미 주의, 0점=3단계 패널티에서 역산). 확정 시 교체. */
+/** 등급 기준: 정상 40~100 / 의심 20~39 / 위험 0~19 (코드값은 문서의 NORMAL / SUSPICIOUS / HIGH_RISK) */
 export const GRADE_TIERS = [
-  { grade: '우수', min: 70 },
-  { grade: '안전', min: 40 },
-  { grade: '주의', min: 20 },
-  { grade: '위험', min: 0 },
+  { code: 'NORMAL', label: '정상', min: 40, policy: '일반 입장' },
+  { code: 'SUSPICIOUS', label: '의심', min: 20, policy: 'CAPTCHA' },
+  { code: 'HIGH_RISK', label: '위험', min: 0, policy: 'CAPTCHA + 후순위' },
 ] as const
-export type CreditGrade = (typeof GRADE_TIERS)[number]['grade']
+export type CreditGradeCode = (typeof GRADE_TIERS)[number]['code']
+export type CreditGrade = (typeof GRADE_TIERS)[number]['label'] // '정상' | '의심' | '위험'
+export type PenaltyPolicy = (typeof GRADE_TIERS)[number]['policy'] // '일반 입장' | 'CAPTCHA' | 'CAPTCHA + 후순위'
 
 export interface CreditInput {
-  attended: number // A  정상 관람 완료 건수 (QR 검표 후 서버가 제공)
-  noShow: number // N  노쇼 건수
-  autoCancel: number // Cauto  선점 후 미입금 자동 취소 건수
-  anomaly: number // S_anomaly  Isolation Forest 이상 확률 0~1 (AI 서버 결과)
-  cardAccounts: number // K_card  최근 30일 동일 카드에 연결된 계정 수 (서버 집계)
-  ipAttempts10m: number // K_ip  동일 IP 최근 10분 내 예매 시도 수 (서버 집계)
-  seatSelectSec: number | null // T_seat  좌석 선택 소요 시간(초), 없으면 null
-  intervalVariance: number | null // σ²_interval  클릭 간격 분산(초²), 요청 5회 미만이면 null
+  attended: number // A  정상 관람 완료 횟수 (QR 검표 후 서버가 제공)
+  noShow: number // N  노쇼 횟수
+  autoCancel: number // Cauto  선점 후 미입금 자동 취소 횟수
+  anomaly: number // S_anomaly  Isolation Forest 정규화 이상 점수 0~1 (AI 서버 결과)
+  cardAccounts: number // card_reuse_count  최근 30일 동일 카드 공유 계정 수 (서버 집계)
+  ipAttempts10m: number // ip_booking_density  동일 IP 최근 10분 예매 시도 수 (서버 집계)
+  seatSelectSec: number | null // seat_selection_latency  좌석 선택 소요 시간(초), 없으면 null
+  intervalVariance: number | null // booking_interval_variance  요청 간격 분산(초²), 요청 5회 미만이면 null
 }
 
 export interface PenaltyItem {
   key: 'IF' | 'card' | 'ip' | 'speed' | 'variance'
+  group: 'AI' | 'RULE'
   label: string
   points: number
 }
 
+/** 최종 산출물: base_credit / dynamic_penalty / credit_score / credit_grade / penalty_policy */
 export interface CreditResult {
-  baseCredit: number
+  baseCredit: number // base_credit
   penalties: PenaltyItem[]
-  suspicionScore: number // = DynamicPenalty
-  credit: number // Credit_final
-  grade: CreditGrade
+  aiPenalty: number // P_IF
+  rulePenalty: number // P_Rule
+  dynamicPenalty: number // dynamic_penalty (= P_IF + P_Rule). 화면의 "의심 점수"
+  credit: number // credit_score
+  gradeCode: CreditGradeCode // credit_grade (NORMAL / SUSPICIOUS / HIGH_RISK)
+  grade: CreditGrade // 정상 / 의심 / 위험
+  policy: PenaltyPolicy // penalty_policy
 }
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
 const round1 = (v: number) => Math.round(v * 10) / 10
 
 export function baseCredit(i: Pick<CreditInput, 'attended' | 'noShow' | 'autoCancel'>): number {
-  const { alpha, beta, noShowWeight, autoCancelWeight } = CREDIT_PARAMS
-  const denom = i.attended + noShowWeight * i.noShow + autoCancelWeight * i.autoCancel + alpha + beta
-  return (100 * (i.attended + alpha)) / denom
+  const P = CREDIT_PARAMS
+  const A = i.attended * P.attendedWeight
+  const N = i.noShow * P.noShowWeight
+  const C = i.autoCancel * P.autoCancelWeight
+  return (100 * (A + P.alpha)) / (A + N + C + P.alpha + P.beta)
 }
 
 export function dynamicPenalties(i: CreditInput): PenaltyItem[] {
@@ -74,31 +85,36 @@ export function dynamicPenalties(i: CreditInput): PenaltyItem[] {
   const pSpeed = i.seatSelectSec !== null && i.seatSelectSec < P.speed.belowSec ? P.speed.points : 0
   const pVar = i.intervalVariance !== null && i.intervalVariance < P.variance.belowSec2 ? P.variance.points : 0
   return [
-    { key: 'IF', label: 'AI 이상 탐지 (Isolation Forest)', points: round1(pIF) },
-    { key: 'card', label: '동일 카드 다계정 사용', points: pCard },
-    { key: 'ip', label: '동일 IP 집중 시도', points: pIp },
-    { key: 'speed', label: '비정상적으로 빠른 좌석 선택', points: pSpeed },
-    { key: 'variance', label: '기계적으로 균일한 클릭 간격', points: pVar },
+    { key: 'IF', group: 'AI', label: 'AI 이상 행동 (Isolation Forest)', points: round1(pIF) },
+    { key: 'card', group: 'RULE', label: '동일 카드 다계정 공유', points: pCard },
+    { key: 'ip', group: 'RULE', label: '동일 IP 집중 예매 시도', points: pIp },
+    { key: 'speed', group: 'RULE', label: '좌석 선택 속도 (1초 미만)', points: pSpeed },
+    { key: 'variance', group: 'RULE', label: '요청 간격 분산 (1.0초² 미만)', points: pVar },
   ]
 }
 
-export function gradeOf(credit: number): CreditGrade {
-  return (GRADE_TIERS.find((t) => credit >= t.min) ?? GRADE_TIERS[GRADE_TIERS.length - 1]).grade
+export function gradeTierOf(credit: number) {
+  return GRADE_TIERS.find((t) => credit >= t.min) ?? GRADE_TIERS[GRADE_TIERS.length - 1]
 }
 
 export function calcCredit(input: CreditInput): CreditResult {
   const base = baseCredit(input)
   const penalties = dynamicPenalties(input)
-  const suspicion = round1(penalties.reduce((s, p) => s + p.points, 0))
-  const credit = round1(Math.max(0, base - suspicion))
-  return { baseCredit: round1(base), penalties, suspicionScore: suspicion, credit, grade: gradeOf(credit) }
-}
-
-/** 클릭 간격 분산(초²). 요청이 minRequests 미만이면 null (판단 불가 → 감점 없음) */
-export function intervalVarianceSec2(timestampsMs: number[]): number | null {
-  if (timestampsMs.length < CREDIT_PARAMS.variance.minRequests) return null
-  const gaps: number[] = []
-  for (let k = 1; k < timestampsMs.length; k++) gaps.push((timestampsMs[k] - timestampsMs[k - 1]) / 1000)
-  const mean = gaps.reduce((s, g) => s + g, 0) / gaps.length
-  return gaps.reduce((s, g) => s + (g - mean) ** 2, 0) / gaps.length
+  const sum = (g: PenaltyItem['group']) => round1(penalties.filter((p) => p.group === g).reduce((s, p) => s + p.points, 0))
+  const aiPenalty = sum('AI')
+  const rulePenalty = sum('RULE')
+  const dynamicPenalty = round1(aiPenalty + rulePenalty)
+  const credit = round1(Math.max(0, base - dynamicPenalty))
+  const tier = gradeTierOf(credit)
+  return {
+    baseCredit: round1(base),
+    penalties,
+    aiPenalty,
+    rulePenalty,
+    dynamicPenalty,
+    credit,
+    gradeCode: tier.code,
+    grade: tier.label,
+    policy: tier.policy,
+  }
 }

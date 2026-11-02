@@ -19,7 +19,8 @@ export interface TicketingApi {
   holdSeats(concertId: string, userId: string, seatIds: string[]): Promise<SeatHold>
   /** 선점 해제 (결제 화면에서 '이전으로' 등). 이미 만료/해제됐어도 오류 없이 끝난다. */
   releaseHold(holdId: string, userId: string): Promise<void>
-  confirmBooking(holdId: string, userId: string): Promise<Booking>
+  /** paymentIdentifier: 서버가 허용한 테스트 결제 식별자(test-pay-shared-01~03). 실제 카드번호가 아니다. */
+  confirmBooking(holdId: string, userId: string, paymentIdentifier: string): Promise<Booking>
   cancelBooking(bookingId: string, userId: string): Promise<Booking>
   listMyBookings(userId: string): Promise<Booking[]>
   /** 예매 건의 입장 QR 데이터. 아직 발급 전이면 null */
@@ -202,7 +203,7 @@ const mock: TicketingApi = {
     s.holds = s.holds.filter((h) => !(h.holdId === holdId && h.userId === userId))
     save(s)
   },
-  async confirmBooking(holdId, userId) {
+  async confirmBooking(holdId, userId, _paymentIdentifier) {
     await sleep(400)
     const s = load()
     purge(s)
@@ -258,20 +259,19 @@ const mock: TicketingApi = {
 }
 
 // ------------------------------------------------------------------
-// 실제 API (TODO: 서연 명세 확정 후 엔드포인트 채우기)
+// 실제 API (서연 데모 백엔드 `feat/#9/demo-backend` 기준, docs/api-spec.md)
 // ------------------------------------------------------------------
 const real: TicketingApi = {
   listConcerts: () => request('GET', '/concerts'),
   getConcert: (id) => request('GET', `/concerts/${id}`),
   listSeats: (concertId) => request('GET', `/concerts/${concertId}/seats`),
   holdSeats: (concertId, _u, seatIds) => request('POST', `/concerts/${concertId}/seat-holds`, { seatIds }),
-  // TODO: 선점 해제 API 경로 확정 후 수정 (현재 경로는 가정)
   releaseHold: (holdId) => request('DELETE', `/seat-holds/${holdId}`),
-  confirmBooking: (holdId) => request('POST', '/bookings', { holdId }),
+  confirmBooking: (holdId, _u, paymentIdentifier) => request('POST', '/bookings', { holdId, paymentIdentifier }),
   cancelBooking: (bookingId) => request('POST', `/bookings/${bookingId}/cancel`),
   listMyBookings: () => request('GET', '/bookings/me'),
-  // TODO: QR 발급 API 경로 확정 후 수정 (현재 경로는 가정)
-  getTicketQr: (bookingId) => request('GET', `/bookings/${bookingId}/qr`),
+  // 데모 백엔드에는 QR 발급 API가 아직 없다(검표/CHECK_IN 미구현) → 호출하지 않고 '발급 전'으로 처리
+  getTicketQr: async () => null,
 }
 
 export const ticketing: TicketingApi = USE_MOCK_TICKETING ? mock : real
