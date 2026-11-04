@@ -15,6 +15,7 @@ import com.bts.demoticketing.common.exception.ApiException;
 import com.bts.demoticketing.common.response.ResponseCode;
 import com.bts.demoticketing.outbox.OutboxRepository;
 import com.bts.demoticketing.user.entity.DemoUser;
+import com.bts.demoticketing.queue.QueueService;
 
 @Service
 @Transactional(isolation=Isolation.READ_COMMITTED)
@@ -25,12 +26,14 @@ public class ReservationService {
     private final Clock clock;
     private final Duration holdDuration;
     private final Set<String> paymentIds;
-    public ReservationService(ReservationRepository repo,OutboxRepository outbox,JsonMapper json,Clock clock,
+    private final QueueService queue;
+    public ReservationService(ReservationRepository repo,OutboxRepository outbox,JsonMapper json,Clock clock,QueueService queue,
             @Value("${demo.hold-duration:PT5M}") Duration holdDuration,
             @Value("${demo.payment-identifiers:test-pay-shared-01,test-pay-shared-02,test-pay-shared-03}") String payments){
         if(holdDuration.isNegative()||holdDuration.isZero())throw new IllegalArgumentException("Hold duration must be positive");
         this.repo=repo;this.outbox=outbox;this.json=json;this.clock=clock;this.holdDuration=holdDuration;
         this.paymentIds=Set.of(payments.split(","));
+        this.queue=queue;
     }
     private LocalDateTime now(){return LocalDateTime.ofInstant(clock.instant(),ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);}
     private static ApiException fail(ResponseCode code){return new ApiException(code);}
@@ -43,6 +46,9 @@ public class ReservationService {
         if(requested==null||requested.isEmpty()||requested.size()>4||new HashSet<>(requested).size()!=requested.size())
             throw fail(ResponseCode.INVALID_SEAT_SELECTION);
         Concert c=repo.lockConcert(concertId).orElseThrow(()->fail(ResponseCode.CONCERT_NOT_FOUND));
+        // Check after the concert lock: time spent waiting for the lock must not preserve
+        // an expired admission. Applies to creation, replacement and identical retries.
+        queue.requireAdmitted(concertId,user.id());
         LocalDateTime now=now();
         expireLocked(c,now);
         List<String> codes=requested.stream().sorted().toList();
@@ -70,6 +76,8 @@ public class ReservationService {
     }
 
     public Confirmation confirm(String holdId,String paymentIdentifier,String observedIp,DemoUser user){
+        // A valid owned hold is the authority here; queue admission was enforced at hold().
+        // Its later expiry (or Redis unavailability) must not invalidate that hold.
         Hold original=repo.hold(holdId).orElseThrow(()->fail(ResponseCode.HOLD_EXPIRED));
         owner(original.userId(),user);
         Concert c=repo.lockConcert(original.concertId());
