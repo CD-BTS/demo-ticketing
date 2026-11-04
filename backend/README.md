@@ -1,5 +1,13 @@
 # 데모 티켓팅 백엔드 — 예매 구현
 
+실제 HTTP/Redis FIFO 시뮬레이터는 저장소 루트 PowerShell에서 다음 한 줄로 실행한다.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\backend\scripts\Test-RedisQueue.ps1
+```
+
+Enter 단계 진행은 `-Interactive`를 추가한다. 전용 서버(18085), 정원 2명, 입장 TTL 60초로 실행하며 기존 서버와 설정은 유지한다. [실행 옵션·실시간 출력·결과 파일·테스트 키 정리 안내](scripts/README-RedisQueue.md)를 참고한다.
+
 Java 17 / Spring Boot 4.1.1 / Gradle Wrapper 9.7.1 / MySQL 8.0.16+.
 
 공연 조회와 데모 세션, 좌석 선점·확정·취소·본인 내역을 구현했다. Controller→Service→Repository와 도메인 Entity/DTO 분리를 유지한다. 공연 조회는 기존 JPA, 잠금이 필요한 예약 도메인은 명시적 JDBC Repository 및 Spring 트랜잭션을 사용한다.
@@ -240,3 +248,33 @@ Compose 최초 초기화와 기존 볼륨 동작은 [MySQL 공식 이미지 문�
 - outbox/OutboxRepository.java, OutboxTransactions.java, OutboxDeliveryService.java
 - test: booking/ReservationMySqlTests.java, integration/bts/BtsClientContractTests.java
 - 기존 조회 Controller/Service·공통 오류 코드·설정·테스트·SQL 적용 스크립트 및 세 설계 문서 보완
+# Issue #15: Redis FIFO 실행
+
+데모 전용 `demo-ticketing-redis`를 localhost:6380에서 사용한다. 다른 프로젝트의 Redis·볼륨·네트워크는 재사용하지 않는다. `backend/`에서 MySQL(기존 3308 설정)과 함께 실행한다:
+
+```powershell
+docker compose up -d
+docker exec demo-ticketing-redis redis-cli ping
+```
+
+Redis 7.4 Alpine은 전용 `demo-ticketing-redis-data` 볼륨에 AOF를 저장하며 Compose의 데모 전용 기본 네트워크에 연결한다. 기본 AOF fsync 정책은 everysec이다. 볼륨 삭제 시 데이터는 사라진다. `REDIS_PORT`를 변경하면 Compose 호스트 포트와 로컬 Spring 설정을 같은 값으로 맞춘다. 기본 REDIS_HOST=localhost, REDIS_PORT=6380이며 연결 정보는 REDIS_*로 변경 가능하다. `.env.example`의 Redis/QUEUE 항목을 로컬 `.env`에 필요한 만큼 추가한다. Spring은 `.env`를 직접 읽지 않으므로 기존 실행기를 사용한다:
+
+```powershell
+.\scripts\Invoke-Backend.ps1 -Task Run
+```
+
+환경변수를 직접 설정했다면 ` .\gradlew.bat bootRun --no-daemon`도 가능하다. 연결은 첫 queue 요청 때 이루어지므로 앱 시작만으로 Redis 연결 성공을 판정하지 않는다. 실제 API 성공과 아래 통합 테스트로 확인한다.
+
+```powershell
+.\scripts\Invoke-Backend.ps1 -Task RedisTest
+.\scripts\Invoke-Backend.ps1 -Task MySqlTest
+$base = 'http://localhost:8080/api/v1'
+$login = Invoke-RestMethod -Method Post -Uri "$base/users" -ContentType 'application/json' -Body '{"userId":"queue_demo01"}'
+$headers = @{ Authorization = "Bearer $($login.data.token)" }
+$concertId = (Invoke-RestMethod "$base/concerts").data[0].id
+Invoke-RestMethod -Method Post -Uri "$base/concerts/$concertId/queue" -Headers $headers
+Invoke-RestMethod -Uri "$base/concerts/$concertId/queue/me" -Headers $headers
+Invoke-RestMethod -Method Delete -Uri "$base/concerts/$concertId/queue/me" -Headers $headers
+```
+
+redisTest는 실제 데모 Redis에 연결하며 무작위 테스트 전용 접두사만 생성·정리한다. 인증/DB/포트는 REDIS_* 환경변수를 사용한다. Spring Boot 전체 컨텍스트/API 검증도 포함하므로 데모 MySQL과 DB 환경 설정이 필요하며 실행기가 .env를 읽는다. 일반 test는 외부 Redis 없이 실행한다. 대기열 상태·오류·TTL·요청 기반 승격 계약은 [API 명세](../docs/api-spec.md)를 따른다.
