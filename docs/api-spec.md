@@ -1,10 +1,34 @@
 # 데모 티켓팅 프론트엔드 분석 및 백엔드 설계
 
-작성일: 2026-11-01. 범위: FE 분석과 백엔드 설계 및 구현. 현재 계약은 아래 **2단계 예매 구현**과 [backend 실행 안내](../backend/README.md)를 우선 적용한다. 이후의 초기 FE 분석·가정은 현재 코드와 비교하기 위한 기록이다.
+작성일: 2026-11-01. 범위: FE 분석과 백엔드 설계 및 구현. 현재 계약은 아래 **Issue #17 입장 권한 검증**, **Issue #15 Redis FIFO 대기열**, **2단계 예매 구현**과 [backend 실행 안내](../backend/README.md)를 우선 적용한다. 이후의 초기 FE 분석·가정은 현재 코드와 비교하기 위한 기록이다.
+
+### Issue #17 입장 권한 검증 (현재 구현)
+
+`POST /api/v1/concerts/{concertId}/seat-holds`는 기존 Bearer 세션의 내부 사용자 ID로 **해당 공연의 Redis 입장 권한**을 검사한다. 요청 body는 기존 `{"seatIds":["A-01"]}` 그대로이며 userId나 별도 입장 토큰을 받지 않는다. 브라우저 sessionStorage는 권한 근거가 아니다.
+
+| Redis 조회 결과 | 좌석 선점 응답 |
+|---|---|
+| 해당 공연 ADMITTED | 기존 선점 검증을 거쳐 201/COMMON_201 |
+| NOT_JOINED / WAITING / EXPIRED | 403/QUEUE_NOT_ADMITTED |
+| 다른 공연에서만 ADMITTED | 요청한 공연 권한이 없으므로 403/QUEUE_NOT_ADMITTED |
+| ADMITTED 멤버가 남아 있어도 입장 deadline 만료 | Lua가 만료 정리한 뒤 403/QUEUE_NOT_ADMITTED |
+| Redis 연결·명령 실패 | 503/SERVICE_UNAVAILABLE, 선점 생성 우회 없음 |
+
+```json
+{"success":false,"code":"QUEUE_NOT_ADMITTED","data":null,"message":"대기열 입장 권한이 없습니다. 대기열 상태를 확인해 주세요."}
+```
+
+검사는 `ReservationService.hold()`의 공연 행 잠금 획득 직후, 선점 데이터 변경 전에 수행한다. 생성·교체·동일 좌석 선점 재요청에도 적용한다. 미인증은 기존 401, 잘못된 입력은 기존 400, 없는 공연은 기존 404를 유지한다. 기존 `QueueService`/`QueueStore`의 status 연산을 재사용하며 Redis TIME 기준 `expiresAt <= now` 정리 및 FIFO 승격 후 **현재 결과**를 판정한다. 따라서 조회 과정에서 FIFO 순서대로 승격된 사용자는 ADMITTED로 허용될 수 있다. Lua·TTL·정원 정책은 변경하지 않는다. 권한은 이 검사 시점에 판정하며 Redis와 MySQL을 하나의 분산 트랜잭션으로 묶지는 않는다.
+
+`POST /api/v1/bookings`는 **유효한 본인 소유 hold**를 기준으로 확정하며 Redis를 다시 검사하지 않는다. 선점 생성 경로에서 입장 권한을 강제하므로 이후 입장 TTL 만료·대기열 이탈·Redis 장애가 이미 유효한 hold를 무효화하지 않는다. 별도 MySQL 입장 기록이나 입장 토큰은 추가하지 않는다. 배포 전 생성된 유효한 hold도 기존 만료까지 이 정책을 따른다.
+
+본인 hold 누락/만료/해제는 기존 410/HOLD_EXPIRED, 타인 hold는 기존 403/FORBIDDEN을 유지한다. 이미 확정한 동일 hold의 재요청은 기존 예매를 반환하는 멱등 처리를 유지하며 이후 hold deadline 경과만으로 재확정을 거부하지 않는다. 기존 충돌 검증과 트랜잭션·잠금·롤백·hold_id UNIQUE는 유지한다.
+
+선점 해제, 예매 취소, 본인 예매 내역에는 대기열 검사를 추가하지 않는다. 공연 목록·상세·좌석 목록은 기존 공개 정책을 유지한다. 구현 완료 범위는 FIFO 및 선점 입장 권한 강제이며, BTS 이상 탐지 기반 차등 대기열(#16), FE 연동, QR/검표는 후속 범위다. [검증 및 직접 PowerShell API 호출](../backend/scripts/README-QueueAdmission.md)을 참고한다.
 
 ### Issue #15 Redis FIFO 대기열 (현재 계약)
 
-기존 좌석 선점·예매 API는 그대로 유지한다. 대기열 입장 권한 강제는 #17 범위다. BTS 점수·차등 순위·CAPTCHA는 사용하지 않는다.
+대기열 API 계약은 아래와 같으며 좌석 선점에 대한 입장 권한 강제는 위 #17 현재 계약을 따른다. BTS 점수·차등 순위·CAPTCHA는 사용하지 않는다.
 
 | Method / URL | 인증 / Request | 정상 응답 |
 |---|---|---|

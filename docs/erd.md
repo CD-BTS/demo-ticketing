@@ -1,5 +1,7 @@
 # 데모 티켓팅 ERD 설계안
 
+**현재 #15/#17 상태:** FIFO 및 선점 입장 권한은 Redis에서 관리하며 MySQL queue_entries/admissions 테이블은 추가하지 않는다. 선점 생성 서비스에서 현재 ADMITTED를 강제하고 예매 확정은 유효한 본인 hold를 기준으로 한다. 기존 hold/booking 스키마는 그대로 유지한다. 아래 1·2단계 상태와 MySQL 대기열 모델은 구현 이력·초기 제안이며 현재 계약은 [API 명세](api-spec.md)의 #17/#15를 따른다. 차등 대기열(#16), QR/검표는 후속 범위다.
+
 작성일: 2026-11-01. [API 명세 및 프론트엔드 분석](api-spec.md) 7.2절의 데모 테이블 설계를 관계도로 보완한다. 초기에는 모두 설계 제안이었으며 현재 생성한 SQL/조회 Entity와 미구현 부분은 아래 1단계 상태로 구분한다. FE 타입이 출발점이며 아래 구조가 기존 BTS DB 구조라는 뜻은 아니다.
 
 **1단계 후속 상태:** [backend/db/schema.sql](../backend/db/schema.sql)의 핵심 8개 테이블을 전용 Compose demo-ticketing-mysql(localhost:3308, demo_user, demo-ticketing-mysql-data 볼륨)의 demo_ticketing_db에 적용했다. 공연 3개·좌석 288개 및 SQL 재실행 시 중복 없음을 검증했다. concerts/concert_seats 조회 Entity만 구현했으며 사용자·선점·예매·티켓 테이블은 비어 있다. 세션·대기열·QR 자격증명·Outbox는 후속 단계다. 기존 BTS 컨테이너/볼륨과 분리했다. 상세는 [실행 안내](../backend/README.md) 참조.

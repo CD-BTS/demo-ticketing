@@ -24,7 +24,7 @@ Java 17 / Spring Boot 4.1.1 / Gradle Wrapper 9.7.1 / MySQL 8.0.16+.
 | POST | /api/v1/bookings/{bookingId}/cancel | Booking, Bearer 필수 |
 | GET | /api/v1/bookings/me | 본인 Booking[], Bearer 필수 |
 
-공개 조회에는 인증/대기열을 요구하지 않는다. 쓰기는 24시간 데모 Bearer 세션으로 소유권을 확인한다. ID 입력만으로 같은 신원을 재시작하는 공유 데모 방식이며 실제 계정 소유권 증명이 아니다. 실제 PG/환불·대기열·QR/검표·Feature 추출은 미구현이다. BTS BOOKING/CANCEL 전송은 구현했지만 실제 발급 설정이 없는 기본 환경에서는 PENDING으로 보존한다.
+공개 조회에는 인증/대기열을 요구하지 않는다. 쓰기는 24시간 데모 Bearer 세션으로 소유권을 확인하며 좌석 선점은 해당 공연 Redis ADMITTED 권한도 요구한다(#17). 유효한 본인 hold는 입장 만료 후에도 예매 확정할 수 있다. ID 입력만으로 같은 신원을 재시작하는 공유 데모 방식이며 실제 계정 소유권 증명이 아니다. FIFO 대기열과 선점 입장 권한 검증은 구현했으며 실제 PG/환불·QR/검표·Feature 추출은 미구현이다. BTS BOOKING/CANCEL 전송은 구현했지만 실제 발급 설정이 없는 기본 환경에서는 PENDING으로 보존한다. [#17 테스트 및 직접 API 호출](scripts/README-QueueAdmission.md)을 참고한다.
 
 ## 참고한 기존 BTS 코드
 
@@ -201,7 +201,7 @@ BTS 연결/timeout/5xx는 같은 payload로 backoff 재시도(최대8회), 400/4
 
 실 HTTP 만료 검사는 별도 테스트 서버를 HOLD_DURATION=PT10S로 실행한 뒤 `Test-BookingApi.ps1 -BaseUrl http://localhost:8081 -CheckExpiry`를 사용한다. 기본5분 서버에서 기다리는 테스트는 거부한다. 검증 뒤 테스트 서버를 종료하고 기본 서버의5분 설정을 유지한다.
 
-남은 작업: FE token/테스트 결제 연결, 실제 사용자 인증(현재 공유 데모), 실제 BTS 발급 설정과 수신 검증, FAILED 재처리 운영 도구, 부하에 따른 좌석별 잠금 세분화, 대기열·QR/검표·CHECK_IN 및 BTS Feature 추출. 실제 PG/환불은 별도 범위다.
+남은 작업: FE token/테스트 결제·대기열 연결, 실제 사용자 인증(현재 공유 데모), 실제 BTS 발급 설정과 수신 검증, FAILED 재처리 운영 도구, 부하에 따른 좌석별 잠금 세분화, 차등 대기열(#16)·QR/검표·CHECK_IN 및 BTS Feature 추출. FIFO 및 선점 입장 권한 검증은 구현 완료다. 실제 PG/환불은 별도 범위다.
 
 ## 생성·수정 파일 목록
 
@@ -277,4 +277,4 @@ Invoke-RestMethod -Uri "$base/concerts/$concertId/queue/me" -Headers $headers
 Invoke-RestMethod -Method Delete -Uri "$base/concerts/$concertId/queue/me" -Headers $headers
 ```
 
-redisTest는 실제 데모 Redis에 연결하며 무작위 테스트 전용 접두사만 생성·정리한다. 인증/DB/포트는 REDIS_* 환경변수를 사용한다. Spring Boot 전체 컨텍스트/API 검증도 포함하므로 데모 MySQL과 DB 환경 설정이 필요하며 실행기가 .env를 읽는다. 일반 test는 외부 Redis 없이 실행한다. 대기열 상태·오류·TTL·요청 기반 승격 계약은 [API 명세](../docs/api-spec.md)를 따른다.
+redisTest는 실제 데모 Redis에 연결하며 무작위 테스트 전용 접두사만 생성·정리한다. 인증/DB/포트는 REDIS_* 환경변수를 사용한다. Spring Boot 전체 컨텍스트/API 검증도 포함하므로 데모 MySQL과 DB 환경 설정이 필요하며 실행기가 .env를 읽는다. #17부터 mysqlTest의 예약 통합 테스트도 실제 Redis를 사용하므로 두 데모 컨테이너가 모두 필요하다. 일반 test는 외부 Redis 없이 실행한다. 대기열 상태·오류·TTL·요청 기반 승격 계약은 [API 명세](../docs/api-spec.md)를 따른다.

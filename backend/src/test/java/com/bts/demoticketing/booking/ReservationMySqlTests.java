@@ -25,17 +25,25 @@ import com.bts.demoticketing.seat.service.SeatQueryService;
 import com.bts.demoticketing.user.entity.DemoUser;
 import com.bts.demoticketing.user.repository.DemoUserRepository;
 import com.bts.demoticketing.user.service.DemoAuthService;
+import com.bts.demoticketing.queue.QueueService;
+import com.bts.demoticketing.queue.QueueStore;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @Tag("mysql")
-@SpringBootTest(properties={"demo.jobs.enabled=false","bts.enabled=true","bts.service-id=it-reservations","bts.api-key=integration-only-key"})
+@SpringBootTest(properties={"demo.jobs.enabled=false","bts.enabled=true","bts.service-id=it-reservations","bts.api-key=integration-only-key","demo.queue.capacity=2"})
 @AutoConfigureMockMvc
 @Import(ReservationMySqlTests.TimeConfig.class)
 class ReservationMySqlTests {
     static final Remote BTS=new Remote();
-    @DynamicPropertySource static void remote(DynamicPropertyRegistry r){r.add("bts.base-url",()->BTS.url());}
+    static final String QUEUE_PREFIX="demo-ticketing:queue:reservation-test:"+UUID.randomUUID();
+    @DynamicPropertySource static void remote(DynamicPropertyRegistry r){
+        r.add("bts.base-url",()->BTS.url());
+        r.add("demo.queue.key-prefix",()->QUEUE_PREFIX);
+    }
     @Autowired ReservationService reservations;
     @Autowired DemoAuthService auth;
     @Autowired DemoUserRepository users;
@@ -45,6 +53,9 @@ class ReservationMySqlTests {
     @Autowired MutableClock clock;
     @Autowired MockMvc mvc;
     @Autowired JsonMapper json;
+    @Autowired QueueService queue;
+    @Autowired StringRedisTemplate redis;
+    @org.springframework.test.context.bean.override.mockito.MockitoSpyBean QueueStore queueStore;
     @org.springframework.test.context.bean.override.mockito.MockitoSpyBean
     com.bts.demoticketing.outbox.OutboxRepository outboxRepository;
     long concertId;
@@ -81,11 +92,15 @@ class ReservationMySqlTests {
         aliceToken=a.token(); alice=findUser(a.userId());userIds.add(alice.id());
         var b=auth.login("it_"+UUID.randomUUID().toString().substring(0,20));
         bobToken=b.token();bob=findUser(b.userId());userIds.add(bob.id());
+        assertEquals("ADMITTED",queue.execute(concert,alice.id(),"join").snapshot().status());
+        assertEquals("ADMITTED",queue.execute(concert,bob.id(),"join").snapshot().status());
     }
     private DemoUser findUser(String publicId){return users.find(jdbc.queryForObject("SELECT id FROM demo_users WHERE public_user_id=?",Long.class,publicId)).orElseThrow();}
 
     @AfterEach void cleanup(){
         // Only this test's random concert/users; no global resets or seed mutations.
+        var keys=redis.keys(QUEUE_PREFIX+":*");
+        if(keys!=null&&!keys.isEmpty())redis.delete(keys);
         jdbc.update("UPDATE concert_seats SET state='AVAILABLE',active_hold_id=NULL,active_booking_id=NULL WHERE concert_id=?",concertId);
         jdbc.update("DELETE FROM admission_tickets WHERE booking_id IN (SELECT id FROM bookings WHERE concert_id=?)",concertId);
         jdbc.update("DELETE FROM booking_seats WHERE booking_id IN (SELECT id FROM bookings WHERE concert_id=?)",concertId);
@@ -103,6 +118,94 @@ class ReservationMySqlTests {
     private String code(Runnable work){return assertThrows(ApiException.class,work::run).getResponseCode().getCode();}
     private long bookings(){return jdbc.queryForObject("SELECT COUNT(*) FROM bookings WHERE concert_id=?",Long.class,concertId);}
     private String state(String code){return jdbc.queryForObject("SELECT state FROM concert_seats WHERE concert_id=? AND seat_code=?",String.class,concertId,code);}
+
+    private String admissionKey(){
+        return QUEUE_PREFIX+":{"+Base64.getUrlEncoder().withoutPadding().encodeToString(concert.getBytes(StandardCharsets.UTF_8))+"}:admitted";
+    }
+    private void expireAdmission(DemoUser user){
+        // Keep the ADMITTED member present with an elapsed absolute deadline: Lua must
+        // detect expiry itself, not merely trust membership. No wall-clock sleep needed.
+        redis.opsForZSet().add(admissionKey(),Long.toString(user.id()),1);
+    }
+    private void assertHoldDenied(String token,String error,int statusCode)throws Exception{
+        long before=jdbc.queryForObject("SELECT COUNT(*) FROM seat_holds WHERE concert_id=?",Long.class,concertId);
+        mvc.perform(post("/api/v1/concerts/"+concert+"/seat-holds").header("Authorization","Bearer "+token)
+                .contentType("application/json").content("{\"seatIds\":[\"A-01\"]}"))
+                .andExpect(status().is(statusCode)).andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.code").value(error)).andExpect(jsonPath("$.data").isEmpty());
+        assertEquals(before,jdbc.queryForObject("SELECT COUNT(*) FROM seat_holds WHERE concert_id=?",Long.class,concertId));
+        assertEquals("AVAILABLE",state("A-01"));
+    }
+
+    @Test void unregisteredAndOtherConcertAdmissionCannotHold()throws Exception{
+        queue.execute(concert,alice.id(),"leave");
+        assertHoldDenied(aliceToken,"QUEUE_NOT_ADMITTED",403);
+        // Admission for the real concert cannot authorize another existing performance.
+        queue.execute(concert,alice.id(),"join");
+        String other="it_"+UUID.randomUUID();
+        jdbc.update("INSERT INTO concerts(public_id,title,artist,venue,start_at,end_at,price_from,tagline,hue) SELECT ?,title,artist,venue,start_at,end_at,price_from,tagline,hue FROM concerts WHERE id=?",other,concertId);
+        try{
+            mvc.perform(post("/api/v1/concerts/"+other+"/seat-holds").header("Authorization","Bearer "+aliceToken)
+                    .contentType("application/json").content("{\"seatIds\":[\"A-01\"]}"))
+                    .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("QUEUE_NOT_ADMITTED"));
+            assertEquals(0,jdbc.queryForObject("SELECT COUNT(*) FROM seat_holds h JOIN concerts c ON c.id=h.concert_id WHERE c.public_id=?",Long.class,other));
+        }finally{jdbc.update("DELETE FROM concerts WHERE public_id=?",other);}
+    }
+    @Test void waitingUserCannotHold()throws Exception{
+        var login=auth.login("it_"+UUID.randomUUID().toString().substring(0,20));
+        var third=findUser(login.userId());userIds.add(third.id());
+        assertEquals("WAITING",queue.execute(concert,third.id(),"join").snapshot().status());
+        assertHoldDenied(login.token(),"QUEUE_NOT_ADMITTED",403);
+    }
+    @Test void staleAdmissionCannotCreateReplaceOrRetryHold()throws Exception{
+        expireAdmission(alice);
+        assertNotNull(redis.opsForZSet().score(admissionKey(),Long.toString(alice.id())));
+        assertHoldDenied(aliceToken,"QUEUE_NOT_ADMITTED",403);
+        assertEquals("EXPIRED",queue.execute(concert,alice.id(),"status").snapshot().status());
+        queue.execute(concert,alice.id(),"join");
+        var original=hold(alice,"A-01");
+        expireAdmission(alice);
+        assertEquals("QUEUE_NOT_ADMITTED",code(()->hold(alice,"A-01")));
+        assertEquals("QUEUE_NOT_ADMITTED",code(()->hold(alice,"A-02")));
+        assertEquals("ACTIVE",jdbc.queryForObject("SELECT status FROM seat_holds WHERE public_id=?",String.class,original.holdId()));
+        assertEquals("HELD",state("A-01"));assertEquals("AVAILABLE",state("A-02"));
+    }
+    @Test void validOwnedHoldConfirmsAfterAdmissionExpiryAndRetriesRemainIdempotent()throws Exception{
+        var h=hold(alice,"A-01");
+        assertEquals(h.holdId(),hold(alice,"A-01").holdId());
+        expireAdmission(alice);
+        assertEquals("EXPIRED",queue.execute(concert,alice.id(),"status").snapshot().status());
+        String body=json.writeValueAsString(Map.of("holdId",h.holdId(),"paymentIdentifier","test-pay-shared-01"));
+        mvc.perform(post("/api/v1/bookings").header("Authorization","Bearer "+bobToken).contentType("application/json").content(body))
+                .andExpect(status().isForbidden()).andExpect(jsonPath("$.code").value("FORBIDDEN"));
+        for(int expected:List.of(201,200))mvc.perform(post("/api/v1/bookings").header("Authorization","Bearer "+aliceToken).contentType("application/json").content(body))
+                .andExpect(status().is(expected)).andExpect(jsonPath("$.data.status").value("CONFIRMED"));
+        assertEquals(1,bookings());assertEquals(1,outboxes());
+    }
+    @Test void expiredOrMissingHoldStillReturnsGoneWithoutAdmission()throws Exception{
+        var h=hold(alice,"A-01");
+        expireAdmission(alice);clock.advance(Duration.ofMinutes(5));
+        for(String id:List.of(h.holdId(),"h_missing"))mvc.perform(post("/api/v1/bookings").header("Authorization","Bearer "+aliceToken)
+                .contentType("application/json").content(json.writeValueAsString(Map.of("holdId",id,"paymentIdentifier","test-pay-shared-01"))))
+                .andExpect(status().isGone()).andExpect(jsonPath("$.code").value("HOLD_EXPIRED"));
+        assertEquals(0,bookings());assertEquals(0,outboxes());
+    }
+    @Test void redisConnectionFailureFailsClosedButDoesNotBlockExistingHoldConfirmation()throws Exception{
+        var h=hold(bob,"A-02");
+        var config=new org.springframework.data.redis.connection.RedisStandaloneConfiguration("127.0.0.1",1);
+        var client=org.springframework.data.redis.connection.lettuce.LettuceClientConfiguration.builder().commandTimeout(Duration.ofMillis(200)).build();
+        var unavailable=new LettuceConnectionFactory(config,client);unavailable.afterPropertiesSet();unavailable.start();
+        try{
+            var failing=new QueueStore(new StringRedisTemplate(unavailable),QUEUE_PREFIX,2,Duration.ofMinutes(5),Duration.ofMinutes(5),Duration.ofMinutes(5));
+            org.mockito.Mockito.doAnswer(invocation->failing.execute(invocation.getArgument(0),invocation.getArgument(1),invocation.getArgument(2)))
+                    .when(queueStore).execute(org.mockito.ArgumentMatchers.anyString(),org.mockito.ArgumentMatchers.anyLong(),org.mockito.ArgumentMatchers.anyString());
+            assertHoldDenied(aliceToken,"SERVICE_UNAVAILABLE",503);
+            assertTrue(book(h,bob).created());
+            reservations.cancel(reservations.mine(bob).get(0).id(),bob);
+            reservations.release(h.holdId(),bob);
+            assertEquals("CANCELLED",reservations.mine(bob).get(0).status());
+        }finally{unavailable.destroy();}
+    }
 
     @Test void normalBookingCancellationResaleAndIdempotency(){
         var h=hold(alice,"A-01","A-02");
