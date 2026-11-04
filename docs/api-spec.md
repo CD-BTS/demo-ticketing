@@ -2,7 +2,71 @@
 
 작성일: 2026-11-01. 범위: FE 분석과 백엔드 설계 및 구현. 현재 계약은 아래 **2단계 예매 구현**과 [backend 실행 안내](../backend/README.md)를 우선 적용한다. 이후의 초기 FE 분석·가정은 현재 코드와 비교하기 위한 기록이다.
 
-### 2단계 예매 구현
+### Issue #15 Redis FIFO 대기열 (현재 계약)
+
+기존 좌석 선점·예매 API는 그대로 유지한다. 대기열 입장 권한 강제는 #17 범위다. BTS 점수·차등 순위·CAPTCHA는 사용하지 않는다.
+
+| Method / URL | 인증 / Request | 정상 응답 |
+|---|---|---|
+| POST /api/v1/concerts/{concertId}/queue | 기존 데모 세션 `Authorization: Bearer <token>`, body 없음 | 신규 및 만료 후 재진입 201/COMMON_201, 활성 중복 200/COMMON_200 |
+| GET /api/v1/concerts/{concertId}/queue/me | 동일 Bearer, body/query 없음 | 200/COMMON_200, 본인 상태 |
+| DELETE /api/v1/concerts/{concertId}/queue/me | 동일 Bearer, body 없음 | 200/COMMON_200, data:null. 반복·미등록 이탈도 동일 |
+
+사용자는 검증된 세션의 내부 ID로 식별하며 요청으로 userId를 받지 않는다. concertId는 비어 있지 않은 최대 50자 공개 ID다. 신규 진입 시 빈자리가 있으면 즉시 ADMITTED가 될 수 있다.
+
+POST 응답 예시(대기 중):
+
+```json
+{"success":true,"code":"COMMON_201","data":{"status":"WAITING","position":1,"expiresAt":"2026-11-04T03:30:00Z"},"message":"요청이 성공했습니다."}
+```
+
+GET 응답 예시(입장 허용):
+
+```json
+{"success":true,"code":"COMMON_200","data":{"status":"ADMITTED","position":0,"expiresAt":"2026-11-04T03:05:00Z"},"message":"요청이 성공했습니다."}
+```
+
+GET 응답 예시(만료):
+
+```json
+{"success":true,"code":"COMMON_200","data":{"status":"EXPIRED","position":null,"expiresAt":null},"message":"요청이 성공했습니다."}
+```
+
+DELETE 응답:
+
+```json
+{"success":true,"code":"COMMON_200","data":null,"message":"요청이 성공했습니다."}
+```
+
+| 오류 HTTP / code | 적용 |
+|---|---|
+| 400 / INVALID_REQUEST | 잘못된 concertId. 기존 검증 오류는 data.errors 배열 사용 |
+| 401 / UNAUTHORIZED | Bearer 누락·불량·중복 헤더·만료 |
+| 404 / CONCERT_NOT_FOUND | 존재하지 않는 공연(세 API 공통) |
+| 503 / SERVICE_UNAVAILABLE | Redis 접속/명령 실패; 성공으로 우회하지 않음 |
+| 500 / INTERNAL_SERVER_ERROR | 예상하지 못한 오류; 내부 상세 비공개 |
+
+오류 예시:
+
+```json
+{"success":false,"code":"SERVICE_UNAVAILABLE","data":null,"message":"현재 서비스를 이용할 수 없습니다."}
+```
+
+상태 전이: `NOT_JOINED → WAITING → ADMITTED → EXPIRED`. 빈자리에서는 WAITING을 거쳐 즉시 ADMITTED 응답. WAITING도 만료될 수 있다. DELETE는 모든 본인 상태를 지워 NOT_JOINED가 되며 재진입하면 새 순번으로 맨 뒤에 선다. 활성 상태의 POST 재요청은 동일 등록과 만료를 유지한다. EXPIRED 재진입은 새 등록이다. GET은 등록하지 않는다. 미등록·이탈·만료기록 보존기간 종료는 NOT_JOINED(position/expiresAt null)이다.
+
+WAITING position은 **현재 대기자 중 1부터 시작하는 순번**이며 ADMITTED는 0이다. 조회 간 만료/이탈로 줄어들 수 있다. expiresAt은 해당 상태의 절대 UTC 만료 시각이며 Redis TIME을 기준으로 한다. 동시 진입 순서는 Redis 스크립트 실행 순서다(클라이언트 전송 시각 기준이 아님).
+
+설정: QUEUE_CAPACITY=100, QUEUE_WAIT_TTL=PT30M, QUEUE_ADMIT_TTL=PT5M, QUEUE_EXPIRED_RETENTION=PT10M. 양수만 허용하며 TTL은 ISO-8601 Duration이다. 대기는 최초 등록부터, 입장은 승격부터 계산하며 GET/중복 POST로 갱신하지 않는다. 만료 판정은 `expiresAt <= Redis 현재 시각`. 정원은 공연별이며 설정 변경 시 모든 앱 인스턴스에 같은 값을 적용해야 한다. 정원을 줄이면 기존 입장자는 만료까지 유지하고 신규 입장을 멈춘다.
+
+**요청 기반 진행:** 모든 대기열 요청에서 Lua가 만료 정리·입장 슬롯 반환·FIFO 승격을 원자적으로 수행한다. 별도 스케줄러/키 만료 알림은 없다. 요청이 없으면 승격하지 않으며 다음 요청 때 정리 후 남은 정원만큼 승격한다. 프론트는 약 2초 간격 GET을 권장한다. 입장 TTL은 실제 승격 시점부터 시작한다. ADMITTED가 자리를 점유하며 예매 완료와 자동 연결되지 않는다. DELETE 또는 만료가 슬롯을 반환한다.
+
+Redis 키는 `QUEUE_KEY_PREFIX:{base64url(concertId)}:*`이며 기본 접두사는 demo-ticketing:queue다. waiting ZSET(score=INCR 순번), deadlines ZSET(대기 만료), admitted ZSET(입장 만료), expired ZSET(만료 기록 보존기한), sequence STRING을 사용한다. List보다 중복 확인·임의 이탈·순번 조회에 적합하다. 같은 공연의 키는 Redis Cluster hash tag를 공유한다. Lua 한 번으로 검사·등록·정리·승격·조회하여 다중 인스턴스에서도 중복 등록과 정원 초과를 막는다. 만료 정리는 만료자 수에 비례하므로 대규모 트래픽에서는 배치 정리 방식 검토가 필요하다.
+
+모든 공연 키에 `max(대기TTL,입장TTL)+만료기록보존기간`의 idle TTL을 적용한다. 요청 때만 갱신되며 개별 사용자의 TTL은 연장되지 않는다. 장기 유휴 공연의 키가 정리되면 NOT_JOINED가 된다. 개발 Redis는 전용 demo-ticketing-redis 컨테이너(localhost:6380), demo-ticketing-redis-data 볼륨과 AOF를 사용한다. 재시작 후에도 저장된 상태를 복원하며 절대 만료 시각은 그대로 적용한다. 기본 everysec 정책에서는 비정상 종료 시 최근 약 1초의 쓰기 유실 가능성이 있다. MySQL 업무 데이터와는 분리된다.
+
+현재 FE의 WaitingRoom은 mock이 기본이고 real adapter는 ticketId 기반 `/queue/{ticketId}`를 가정한다. 이번 `/concerts/{concertId}/queue/me`와 후속 연동이 필요하며 이번 이슈에서 FE/UI를 변경하지 않는다. sessionStorage의 입장 기록은 서버 권한이 아니다.
+
+### 2단계 예매 구현 (이력)
 
 공연/좌석 공개 조회를 유지하고 선점·확정·취소·본인 내역·데모 세션을 추가했다. 실제 카드 승인/환불, Redis 대기열, QR 발급/검표, CHECK_IN 전송은 이번 구현에 포함하지 않는다. BTS는 서버 전용 X-API-Key로 호출하며 브라우저의 기존 9종 /events 신호는 중계하지 않는다.
 
