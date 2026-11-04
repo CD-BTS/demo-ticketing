@@ -34,11 +34,13 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @Tag("mysql")
-@SpringBootTest(properties={"demo.jobs.enabled=false","bts.enabled=true","bts.service-id=it-reservations","bts.api-key=integration-only-key","demo.queue.capacity=2"})
+@SpringBootTest(properties={"demo.jobs.enabled=false","bts.enabled=true","bts.service-id=it-reservations","bts.api-key=integration-only-key","demo.queue.capacity=2","demo.policy.mode=disabled","demo.captcha.mode=disabled"})
 @AutoConfigureMockMvc
 @Import(ReservationMySqlTests.TimeConfig.class)
 class ReservationMySqlTests {
     static final Remote BTS=new Remote();
+    // Avoid creating already-expired fixtures for any other demo server's expiry worker.
+    static final Instant TEST_NOW=Instant.now().truncatedTo(java.time.temporal.ChronoUnit.MICROS);
     static final String QUEUE_PREFIX="demo-ticketing:queue:reservation-test:"+UUID.randomUUID();
     @DynamicPropertySource static void remote(DynamicPropertyRegistry r){
         r.add("bts.base-url",()->BTS.url());
@@ -68,7 +70,7 @@ class ReservationMySqlTests {
         @Bean @Primary MutableClock testClock(){return new MutableClock();}
     }
     static class MutableClock extends Clock {
-        final AtomicReference<Instant> time=new AtomicReference<>(Instant.parse("2026-11-01T04:00:00Z"));
+        final AtomicReference<Instant> time=new AtomicReference<>(TEST_NOW);
         void advance(Duration d){time.updateAndGet(t->t.plus(d));}
         @Override public ZoneId getZone(){return ZoneOffset.UTC;}
         @Override public Clock withZone(ZoneId z){return this;}
@@ -76,7 +78,7 @@ class ReservationMySqlTests {
     }
     @BeforeEach void setup(){
         assertEquals("demo_ticketing_db",jdbc.queryForObject("SELECT DATABASE()",String.class));
-        clock.time.set(Instant.parse("2026-11-01T04:00:00Z"));
+        clock.time.set(TEST_NOW);
         BTS.reset();
         concert="it_"+UUID.randomUUID();
         jdbc.update("""
@@ -209,7 +211,7 @@ class ReservationMySqlTests {
 
     @Test void normalBookingCancellationResaleAndIdempotency(){
         var h=hold(alice,"A-01","A-02");
-        assertEquals(Instant.parse("2026-11-01T04:05:00Z"),h.expiresAt().toInstant());
+        assertEquals(TEST_NOW.plus(Duration.ofMinutes(5)),h.expiresAt().toInstant());
         assertEquals(h.holdId(),hold(alice,"A-02","A-01").holdId());
         assertTrue(seats.list(concert,alice.id()).get(0).heldByMe());
         assertFalse(seats.list(concert,bob.id()).get(0).heldByMe());

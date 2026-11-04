@@ -23,7 +23,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @Tag("redis")
-@SpringBootTest(properties={"demo.jobs.enabled=false","bts.enabled=false","demo.queue.capacity=1"})
+@SpringBootTest(properties={"demo.jobs.enabled=false","bts.enabled=false","demo.queue.capacity=1","demo.policy.mode=disabled","demo.captcha.mode=disabled"})
 @AutoConfigureMockMvc
 class QueueApiRedisTests {
     static final String PREFIX="demo-ticketing:queue:api-test:"+UUID.randomUUID();

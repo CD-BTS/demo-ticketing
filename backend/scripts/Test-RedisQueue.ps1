@@ -12,7 +12,7 @@ $concert = "fifo-sim-$run"
 $prefix = "demo-ticketing:queue-sim:$run"
 $tag = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($concert)).TrimEnd('=').Replace('+','-').Replace('/','_')
 $base = $prefix + ':{' + $tag + '}:'
-$keys = @('waiting','deadlines','admitted','expired','sequence') | ForEach-Object { $base + $_ }
+$keys = @('waiting','deadlines','admitted','expired','sequence','waiting-delayed') | ForEach-Object { $base + $_ }
 $users = @()
 $server = $null
 $saved = @{}
@@ -72,6 +72,8 @@ try {
     Read-DemoEnvironment -Path (Join-Path $root '.env')
     $settings = @{DB_HOST='localhost';DB_PORT='3308';DB_USERNAME='demo_user';SERVER_PORT="$Port";REDIS_HOST='localhost';REDIS_PORT='6380';REDIS_DATABASE='0';REDIS_USERNAME='';REDIS_PASSWORD='';QUEUE_KEY_PREFIX=$prefix;QUEUE_CAPACITY='2';QUEUE_WAIT_TTL='PT1H';QUEUE_ADMIT_TTL="PT$($AdmitTtlSeconds)S";QUEUE_EXPIRED_RETENTION='PT1H';BTS_ENABLED='false';DEMO_JOBS_ENABLED='false'}
     foreach ($key in $settings.Keys) { [Environment]::SetEnvironmentVariable($key,$settings[$key],'Process') }
+    $env:POLICY_DECISION_MODE = 'disabled'
+    $env:CAPTCHA_MODE = 'disabled'
     Push-Location $root
     try { & .\gradlew.bat bootJar --no-daemon | Out-Host; Assert ($LASTEXITCODE -eq 0) 'bootJar build' } finally { Pop-Location }
     $jar = Get-ChildItem (Join-Path $root 'build/libs/*.jar') | Where-Object Name -NotLike '*-plain.jar' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
