@@ -36,6 +36,7 @@ services:
       - ./db/schema.sql:/docker-entrypoint-initdb.d/10-schema.sql:ro
       - ./db/seed.sql:/docker-entrypoint-initdb.d/20-seed.sql:ro
       - ./db/02-booking-support.sql:/docker-entrypoint-initdb.d/30-booking-support.sql:ro
+      - ./db/03-seat-concurrency.sql:/docker-entrypoint-initdb.d/40-seat-concurrency.sql:ro
     healthcheck:
       test: ["CMD-SHELL", 'MYSQL_PWD="$${MYSQL_PASSWORD}" mysql --host=127.0.0.1 --user="$${MYSQL_USER}" --database="$${MYSQL_DATABASE}" --batch --skip-column-names --execute="SELECT COUNT(*) FROM concerts" >/dev/null 2>&1']
       start_period: 30s

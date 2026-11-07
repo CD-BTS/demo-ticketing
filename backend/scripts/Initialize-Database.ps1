@@ -10,7 +10,7 @@ SELECT DATABASE() AS active_database, CURRENT_USER() AS authenticated_user, VERS
 SELECT TABLE_NAME,TABLE_ROWS AS estimated_rows FROM information_schema.TABLES WHERE TABLE_SCHEMA='demo_ticketing_db';
 '@)
 if ($Apply) {
-    foreach ($file in @('schema.sql','seed.sql','02-booking-support.sql')) {
+    foreach ($file in @('schema.sql','seed.sql','02-booking-support.sql','03-seat-concurrency.sql')) {
         $sqlPath = Join-Path $backendRoot ('db/' + $file)
         $null = Invoke-DemoMySql -Sql (Get-Content -Raw -Encoding UTF8 -LiteralPath $sqlPath)
         Write-Output ("Applied demo-only SQL: " + $file)

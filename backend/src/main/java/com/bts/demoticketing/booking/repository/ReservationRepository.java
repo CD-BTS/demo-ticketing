@@ -20,8 +20,22 @@ public class ReservationRepository {
     private final RowMapper<Seat> seat=(r,n)->new Seat(r.getLong("id"),r.getString("seat_code"),r.getString("grade"),r.getLong("price"),r.getString("state"),r.getObject("active_hold_id",Long.class),r.getObject("active_booking_id",Long.class));
     private final RowMapper<Booking> booking=(r,n)->new Booking(r.getLong("id"),r.getString("public_id"),r.getLong("user_id"),r.getLong("concert_id"),r.getLong("hold_id"),r.getString("status"),r.getLong("total_price"),r.getString("concert_title_snapshot"),r.getString("venue_snapshot"),date(r,"start_at_snapshot"),date(r,"end_at_snapshot"),date(r,"created_at"),date(r,"confirmed_at"),r.getBigDecimal("booking_duration_seconds"),r.getString("payment_identifier"),r.getString("ip_address"));
 
-    public Optional<Concert> lockConcert(String publicId){return jdbc.query("SELECT * FROM concerts WHERE public_id=? FOR UPDATE",concert,publicId).stream().findFirst();}
-    public Concert lockConcert(long id){return jdbc.query("SELECT * FROM concerts WHERE id=? FOR UPDATE",concert,id).get(0);}
+    public Optional<Concert> concert(String publicId){return jdbc.query("SELECT * FROM concerts WHERE public_id=?",concert,publicId).stream().findFirst();}
+    public void lockUserConcert(long user,long concert){
+        jdbc.update("INSERT INTO reservation_user_concert_guards(user_id,concert_id) VALUES(?,?) ON DUPLICATE KEY UPDATE user_id=user_id",user,concert);
+        jdbc.queryForObject("SELECT user_id FROM reservation_user_concert_guards WHERE user_id=? AND concert_id=? FOR UPDATE",Long.class,user,concert);
+    }
+    public Hold lockHold(long id){return jdbc.query("SELECT * FROM seat_holds WHERE id=? FOR UPDATE",hold,id).get(0);}
+    public Optional<Hold> hold(long id){return jdbc.query("SELECT * FROM seat_holds WHERE id=?",hold,id).stream().findFirst();}
+    public Booking lockBooking(long id){return jdbc.query("SELECT * FROM bookings WHERE id=? FOR UPDATE",booking,id).get(0);}
+    public List<Long> holdSeatIds(long id){return jdbc.queryForList("SELECT concert_seat_id FROM seat_hold_items WHERE hold_id=? ORDER BY concert_seat_id",Long.class,id);}
+    public List<Long> bookingSeatIds(long id){return jdbc.queryForList("SELECT concert_seat_id FROM booking_seats WHERE booking_id=? ORDER BY concert_seat_id",Long.class,id);}
+    // 결과 정렬에 의존하지 않고 PK 단건 조회 순서로 실제 잠금 순서를 고정한다.
+    public List<Seat> lockSeats(Collection<Long> ids){
+        List<Seat> result=new ArrayList<>();
+        for(long id:new TreeSet<>(ids))result.add(jdbc.query("SELECT * FROM concert_seats WHERE id=? FOR UPDATE",seat,id).get(0));
+        return result;
+    }
     public Concert concert(long id){return jdbc.query("SELECT * FROM concerts WHERE id=?",concert,id).get(0);}
     public List<com.bts.demoticketing.seat.dto.SeatResponse> visibleSeats(String concertId,Long userId,LocalDateTime now){
         return jdbc.query("""
@@ -40,25 +54,23 @@ public class ReservationRepository {
                 },concertId);
     }
     public Optional<Hold> hold(String id){return jdbc.query("SELECT * FROM seat_holds WHERE public_id=?",hold,id).stream().findFirst();}
-    public Optional<Hold> activeHold(long user,long concert){return jdbc.query("SELECT * FROM seat_holds WHERE user_id=? AND concert_id=? AND status='ACTIVE' ORDER BY id FOR UPDATE",hold,user,concert).stream().findFirst();}
-    public List<Hold> expired(long concert,LocalDateTime now){return jdbc.query("SELECT * FROM seat_holds WHERE concert_id=? AND status='ACTIVE' AND expires_at<=? ORDER BY id FOR UPDATE",hold,concert,now);}
+    public Optional<Hold> activeHold(long user,long concert){return jdbc.query("SELECT * FROM seat_holds WHERE user_id=? AND concert_id=? AND status='ACTIVE' ORDER BY id",hold,user,concert).stream().findFirst();}
+    public List<Hold> expired(long concert,LocalDateTime now){return jdbc.query("SELECT * FROM seat_holds WHERE concert_id=? AND status='ACTIVE' AND expires_at<=? ORDER BY id",hold,concert,now);}
     public List<Long> expiredConcerts(LocalDateTime now){return jdbc.queryForList("SELECT DISTINCT concert_id FROM seat_holds WHERE status='ACTIVE' AND expires_at<=?",Long.class,now);}
     public List<Seat> seats(long concert,List<String> codes){
         String placeholders=String.join(",",Collections.nCopies(codes.size(),"?"));
         List<Object> values=new ArrayList<>(); values.add(concert); values.addAll(codes);
-        return jdbc.query("SELECT * FROM concert_seats WHERE concert_id=? AND seat_code IN ("+placeholders+") ORDER BY id FOR UPDATE",seat,values.toArray());
+        return jdbc.query("SELECT * FROM concert_seats WHERE concert_id=? AND seat_code IN ("+placeholders+") ORDER BY id",seat,values.toArray());
     }
-    public List<Seat> heldSeats(long holdId){return jdbc.query("""
-            SELECT s.* FROM concert_seats s JOIN seat_hold_items i ON i.concert_seat_id=s.id
-            WHERE i.hold_id=? ORDER BY s.id FOR UPDATE
-            """,seat,holdId);}
     public List<String> holdCodes(long holdId){return jdbc.queryForList("""
             SELECT s.seat_code FROM seat_hold_items i JOIN concert_seats s ON s.id=i.concert_seat_id
             WHERE i.hold_id=? ORDER BY s.seat_code
             """,String.class,holdId);}
     public void endHold(long holdId,String state){
-        jdbc.update("UPDATE concert_seats SET state='AVAILABLE',active_hold_id=NULL,version=version+1 WHERE active_hold_id=?",holdId);
-        jdbc.update("UPDATE seat_holds SET status=? WHERE id=? AND status='ACTIVE'",state,holdId);
+        int changed=jdbc.update("UPDATE concert_seats SET state='AVAILABLE',active_hold_id=NULL,version=version+1 WHERE active_hold_id=? AND state='HELD'",holdId);
+        if(changed!=holdSeatIds(holdId).size())throw new IllegalStateException("Hold release invariant violated");
+        if(jdbc.update("UPDATE seat_holds SET status=? WHERE id=? AND status='ACTIVE'",state,holdId)!=1)
+            throw new IllegalStateException("Hold transition invariant violated");
     }
     public Hold createHold(String publicId,long user,long concert,LocalDateTime now,LocalDateTime expiry,List<Seat> seats){
         long id=insert("INSERT INTO seat_holds(public_id,user_id,concert_id,status,created_at,expires_at) VALUES(?,?,?,'ACTIVE',?,?)",publicId,user,concert,now,expiry);
@@ -91,15 +103,18 @@ public class ReservationRepository {
         }
         int changed=jdbc.update("UPDATE concert_seats SET state='BOOKED',active_hold_id=NULL,active_booking_id=?,version=version+1 WHERE active_hold_id=? AND state='HELD'",id,h.id());
         if(changed!=seats.size())throw new IllegalStateException("Hold occupancy invariant violated");
-        jdbc.update("UPDATE seat_holds SET status='CONVERTED' WHERE id=?",h.id());
+        if(jdbc.update("UPDATE seat_holds SET status='CONVERTED' WHERE id=? AND status='ACTIVE'",h.id())!=1)
+            throw new IllegalStateException("Hold conversion invariant violated");
         return booking(publicId).orElseThrow();
     }
     public List<String> ticketIds(long booking){return jdbc.queryForList("SELECT public_id FROM admission_tickets WHERE booking_id=? ORDER BY concert_seat_id",String.class,booking);}
     public boolean checkedIn(long booking){return jdbc.queryForObject("SELECT COUNT(*) FROM admission_tickets WHERE booking_id=? AND status='CHECKED_IN'",Long.class,booking)>0;}
     public void cancel(Booking b,LocalDateTime now){
-        jdbc.update("UPDATE bookings SET status='CANCELLED',cancelled_at=? WHERE id=? AND status='CONFIRMED'",now,b.id());
+        if(jdbc.update("UPDATE bookings SET status='CANCELLED',cancelled_at=? WHERE id=? AND status='CONFIRMED'",now,b.id())!=1)
+            throw new IllegalStateException("Booking cancellation invariant violated");
         jdbc.update("UPDATE admission_tickets SET status='CANCELLED' WHERE booking_id=? AND status='ISSUED'",b.id());
-        jdbc.update("UPDATE concert_seats SET state='AVAILABLE',active_booking_id=NULL,version=version+1 WHERE active_booking_id=?",b.id());
+        int changed=jdbc.update("UPDATE concert_seats SET state='AVAILABLE',active_booking_id=NULL,version=version+1 WHERE active_booking_id=? AND state='BOOKED'",b.id());
+        if(changed!=bookingSeatIds(b.id()).size())throw new IllegalStateException("Booking occupancy invariant violated");
     }
     private long insert(String sql,Object... args){
         KeyHolder keys=new GeneratedKeyHolder();
