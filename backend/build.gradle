@@ -38,3 +38,20 @@ tasks.register('mysqlTest', Test) {
     useJUnitPlatform { includeTags 'mysql' }
     shouldRunAfter tasks.named('test')
 }
+
+// 성능 테스트 전용 클래스는 main/test 및 운영 bootJar에 포함하지 않는다.
+sourceSets {
+    queuePerf {
+        compileClasspath += sourceSets.main.output + configurations.runtimeClasspath
+        runtimeClasspath += output + compileClasspath
+    }
+}
+tasks.register('prepareQueuePerf') {
+    dependsOn tasks.named('queuePerfClasses'), tasks.named('bootJar')
+    doLast {
+        def destination = layout.buildDirectory.file('queue-perf/classpath.txt').get().asFile
+        destination.parentFile.mkdirs()
+        destination.setText(sourceSets.queuePerf.runtimeClasspath.asPath, 'UTF-8')
+        layout.buildDirectory.file('queue-perf/bootjar.txt').get().asFile.setText(tasks.named('bootJar').get().archiveFile.get().asFile.absolutePath, 'UTF-8')
+    }
+}
