@@ -34,6 +34,15 @@ CREATE TABLE IF NOT EXISTS concerts (
   INDEX ix_concert_start (start_at, public_id)
 ) ENGINE=InnoDB;
 
+-- 동일 사용자/공연의 선점 생성·변경만 직렬화한다. 좌석 점유는 좌석 행으로 보호한다.
+CREATE TABLE IF NOT EXISTS reservation_user_concert_guards (
+  user_id BIGINT NOT NULL,
+  concert_id BIGINT NOT NULL,
+  PRIMARY KEY (user_id, concert_id),
+  CONSTRAINT fk_reservation_guard_user FOREIGN KEY (user_id) REFERENCES demo_users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_reservation_guard_concert FOREIGN KEY (concert_id) REFERENCES concerts(id) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
 -- Reservation tables are reused by the transactional booking implementation.
 CREATE TABLE IF NOT EXISTS seat_holds (
   id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,

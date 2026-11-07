@@ -57,7 +57,7 @@ class ConcertApiMySqlTests {
 
     @Test
     void sqlSchemaHasRequiredIntegrityConstraints() {
-        assertEquals(10, jdbc.queryForObject("""
+        assertEquals(11, jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.TABLES
                 WHERE TABLE_SCHEMA='demo_ticketing_db' AND TABLE_TYPE='BASE TABLE'
                 """, Integer.class));
