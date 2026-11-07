@@ -1,5 +1,11 @@
 # BTS 사용자·이벤트 API 연동 설계
 
+**Issue #16 현재 구현:** Demo Ticketing의 `PolicyDecisionClient`와 명시적 Mock 설정으로 ALLOW/REQUIRE_CAPTCHA/DELAY/RESTRICT에 따른 등록·CAPTCHA·차등 Redis 대기열을 구현했다. 실제 BTS `POST /api/v1/users/{userId}/policy-decisions` (`context=QUEUE_JOIN`, 응답 `data.action`) 호출 구현과 해당 원격 API의 가용성 검증은 이번 범위에 포함하지 않았다. 기존 사용자·이벤트 BtsClient 및 Outbox는 유지한다. `latestAction`을 이번 신규 결정 응답 대신 사용하지 않는다.
+
+실제 구현체로 교체할 때 userId는 서버에 저장된 BTS UUID이고 인증은 서버 전용 X-API-Key다. 현재 UUID는 최초 Outbox 전송 때 매핑하므로 대기열 등록 시 null일 수 있다. 사전 매핑과 실패 처리는 실제 정책 연동 시 해결할 과제다. Mock은 인증된 DemoUser.publicId를 서버 설정과 비교하며 가짜 UUID를 생성·저장하지 않는다. 정책 장애·알 수 없는 응답을 ALLOW로 우회해서는 안 된다. 활성 WAITING/ADMITTED에는 정책을 재적용하지 않고, 이탈·만료 후 새 등록에서 다시 평가한다.
+
+Mock CAPTCHA는 시연용 산술 문제와 서버의 일회용 증명이며 실제 봇 방지 서비스가 아니다. 실제 CAPTCHA 연동은 별도 후속 작업이다. [현재 구현·설정·미완료 범위](../backend/scripts/README-PriorityQueue.md)를 우선 참고한다.
+
 기준일: 2026-11-01. 근거는 사용자가 제공한 **실제 BTS 사용자·이벤트 API 명세**와 FE 코드다. 초기 설계 시에는 BTS 소스가 미확인이었고, 1단계에서 아래 인접 저장소 소스를 추가 확인했다. 확정 계약과 신규 설계를 구분하며 실제 BTS 연동 구현은 아직 하지 않았다.
 
 **1단계 구현 후속:** 인접 `../backend`의 실제 BTS build.gradle, user Controller/Entity/DTO, common 응답/예외, db/schema.sql을 읽기 전용으로 확인했다. 데모 backend는 이 레이어·응답/예외·SQL 수동 관리 컨벤션과 Java/Boot/Gradle 기준을 참고해 조회 API만 구현했다. BTS 소스/DB·인증·Event API는 수정하지 않았고, 이 문서의 매핑/Outbox/metadata 전송은 여전히 후속 설계다. 초기 ‘소스 미확인/문서 한정’ 설명은 이전 설계 시점의 근거를 나타낸다.

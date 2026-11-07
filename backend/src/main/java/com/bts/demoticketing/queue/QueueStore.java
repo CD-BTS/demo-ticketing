@@ -41,14 +41,31 @@ public class QueueStore {
     public record Result(Snapshot snapshot, boolean created) {}
 
     public Result execute(String concert, long user, String operation) {
+        return run(concert,user,operation,"ALLOW",null);
+    }
+    public Result join(String concert,long user,String action,String captchaToken){
+        return run(concert,user,"join",action,captchaToken);
+    }
+    public String base(String concert){
         String tag=Base64.getUrlEncoder().withoutPadding().encodeToString(concert.getBytes(StandardCharsets.UTF_8));
-        String base=prefix+":{"+tag+"}:";
+        return prefix+":{"+tag+"}:";
+    }
+    private Result run(String concert,long user,String operation,String action,String captchaToken){
+        String base=base(concert);
+        var policy=QueueJoinPolicy.forAction(com.bts.demoticketing.integration.bts.PolicyDecisionClient.Action.valueOf(action));
+        boolean provided=captchaToken!=null&&!captchaToken.isBlank();
+        String grant=base+"captcha-grant:"+(provided?com.bts.demoticketing.captcha.CaptchaService.digest(captchaToken):"none");
         try {
             List<?> result=redis.execute(script,
-                    List.of(base+"waiting",base+"deadlines",base+"admitted",base+"expired",base+"sequence"),
+                    List.of(base+"waiting",base+"deadlines",base+"admitted",base+"expired",base+"sequence",base+"waiting-delayed",grant),
                     operation,Long.toString(user),Integer.toString(capacity),Long.toString(waitTtl),
-                    Long.toString(admitTtl),Long.toString(retention));
+                    Long.toString(admitTtl),Long.toString(retention),action,
+                    policy.delayed()?"1":"0",policy.captchaRequired()?"1":"0",policy.restricted()?"1":"0",provided?"1":"0");
             if(result==null || result.size()!=4) throw new IllegalStateException("Invalid queue script response");
+            String status=result.get(0).toString();
+            if(status.equals("CAPTCHA_REQUIRED"))throw new ApiException(ResponseCode.CAPTCHA_REQUIRED);
+            if(status.equals("CAPTCHA_INVALID"))throw new ApiException(ResponseCode.CAPTCHA_INVALID);
+            if(status.equals("QUEUE_RESTRICTED"))throw new ApiException(ResponseCode.QUEUE_RESTRICTED);
             long position=Long.parseLong(result.get(1).toString());
             long expiry=Long.parseLong(result.get(2).toString());
             return new Result(new Snapshot(result.get(0).toString(),position<0?null:position,

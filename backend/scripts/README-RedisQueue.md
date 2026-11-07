@@ -28,18 +28,18 @@ Docker Desktop, Java 17, `backend/.env`의 데모 MySQL 접속 비밀번호가 �
 
 - `http.jsonl`: 사용자 인증 토큰을 제외한 실제 HTTP 상태 코드와 응답
 - `latest-api.json`: 마지막 표의 실제 API 조회값
-- `redis-final.json`: 최종 Redis 5개 키의 실제 값과 score
+- `redis-final.json`: 최종 Redis 6개 대기열 키의 실제 값과 score (#16 waiting-delayed 포함)
 - `server.stdout.log`, `server.stderr.log`: 전용 서버 로그
 
-종료 시 스크립트가 시작한 Java 프로세스와 **해당 실행의 정확한 Redis 키 5개만** 정리합니다. 기존 Redis 키와 기존 사용자·예매 데이터는 삭제하지 않습니다. 강제 프로세스 종료나 터미널 강제 종료 시 finally 정리는 보장되지 않으며, 테스트 키에는 유휴 TTL이 적용됩니다. 테스트 공연·사용자·세션은 구분된 이름으로 DB에 남깁니다.
+종료 시 스크립트가 시작한 Java 프로세스와 **해당 실행의 정확한 Redis 키 6개만** 정리합니다. 기존 Redis 키와 기존 사용자·예매 데이터는 삭제하지 않습니다. 강제 프로세스 종료나 터미널 강제 종료 시 finally 정리는 보장되지 않으며, 테스트 키에는 유휴 TTL이 적용됩니다. 테스트 공연·사용자·세션은 구분된 이름으로 DB에 남깁니다. FIFO 시뮬레이터는 #16 정책 및 CAPTCHA를 명시적으로 비활성화합니다. [차등 대기열 테스트](README-PriorityQueue.md)는 별도 안내를 따릅니다.
 
-Redis 결과를 직접 더 살펴보려면 `-KeepQueueKeys`를 추가하세요. 출력된 접두사와 공연의 키는 유휴 TTL 동안 보존됩니다. 수동 정리는 출력된 정확한 실행 ID를 사용해 해당 5개 키만 지정합니다. 아래는 예시이며 실제 출력된 ID로 교체해야 합니다.
+Redis 결과를 직접 더 살펴보려면 `-KeepQueueKeys`를 추가하세요. 출력된 접두사와 공연의 키는 유휴 TTL 동안 보존됩니다. 수동 정리는 출력된 정확한 실행 ID를 사용해 해당 6개 키만 지정합니다. 아래는 예시이며 실제 출력된 ID로 교체해야 합니다.
 
 ```powershell
 $runId = '실제출력된12자리실행ID'
 $concertId = "fifo-sim-$runId"
 $tag = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($concertId)).TrimEnd('=').Replace('+','-').Replace('/','_')
 $base = 'demo-ticketing:queue-sim:' + $runId + ':{' + $tag + '}:'
-$keys = @('waiting','deadlines','admitted','expired','sequence') | ForEach-Object { $base + $_ }
+$keys = @('waiting','deadlines','admitted','expired','sequence','waiting-delayed') | ForEach-Object { $base + $_ }
 docker exec demo-ticketing-redis redis-cli DEL @keys
 ```

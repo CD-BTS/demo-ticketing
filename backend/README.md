@@ -1,5 +1,7 @@
 # 데모 티켓팅 백엔드 — 예매 구현
 
+Issue #16의 Mock 정책·서버 CAPTCHA 인증·일반/후순위 Redis 대기열을 구현했다. 기본 설정은 비활성화이며 테스트·시연 시 명시적으로 활성화한다. 실제 BTS 정책 결정 API와 실제 CAPTCHA 서비스는 미연동이다. Mock 산술 문제는 실제 봇 방지 기능이 아니다. [설정·직접 API 호출·동시성 테스트·기아 및 후속 과제](scripts/README-PriorityQueue.md)를 참고한다.
+
 실제 HTTP/Redis FIFO 시뮬레이터는 저장소 루트 PowerShell에서 다음 한 줄로 실행한다.
 
 ```powershell
@@ -201,7 +203,7 @@ BTS 연결/timeout/5xx는 같은 payload로 backoff 재시도(최대8회), 400/4
 
 실 HTTP 만료 검사는 별도 테스트 서버를 HOLD_DURATION=PT10S로 실행한 뒤 `Test-BookingApi.ps1 -BaseUrl http://localhost:8081 -CheckExpiry`를 사용한다. 기본5분 서버에서 기다리는 테스트는 거부한다. 검증 뒤 테스트 서버를 종료하고 기본 서버의5분 설정을 유지한다.
 
-남은 작업: FE token/테스트 결제·대기열 연결, 실제 사용자 인증(현재 공유 데모), 실제 BTS 발급 설정과 수신 검증, FAILED 재처리 운영 도구, 부하에 따른 좌석별 잠금 세분화, 차등 대기열(#16)·QR/검표·CHECK_IN 및 BTS Feature 추출. FIFO 및 선점 입장 권한 검증은 구현 완료다. 실제 PG/환불은 별도 범위다.
+남은 작업: FE token/테스트 결제·대기열 연결, 실제 사용자 인증(현재 공유 데모), 실제 BTS 정책 결정·CAPTCHA 서비스 연동, 실제 BTS 발급 설정과 수신 검증, FAILED 재처리 운영 도구, 부하에 따른 좌석별 잠금 세분화, QR/검표·CHECK_IN 및 BTS Feature 추출. FIFO·선점 입장 권한 검증·Mock 차등 대기열은 구현 완료다. 실제 PG/환불은 별도 범위다.
 
 ## 생성·수정 파일 목록
 

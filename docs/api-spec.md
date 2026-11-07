@@ -1,6 +1,25 @@
 # 데모 티켓팅 프론트엔드 분석 및 백엔드 설계
 
-작성일: 2026-11-01. 범위: FE 분석과 백엔드 설계 및 구현. 현재 계약은 아래 **Issue #17 입장 권한 검증**, **Issue #15 Redis FIFO 대기열**, **2단계 예매 구현**과 [backend 실행 안내](../backend/README.md)를 우선 적용한다. 이후의 초기 FE 분석·가정은 현재 코드와 비교하기 위한 기록이다.
+### Issue #16 Mock 정책 기반 차등 대기열 (현재 구현)
+
+정책·CAPTCHA Mock은 환경 설정으로 명시적으로 활성화한다. 기본 disabled는 기존 등록 호환성을 유지한다. Mock 미설정 사용자는 ALLOW다. ALLOW/REQUIRE_CAPTCHA는 일반, DELAY는 후순위 그룹이며 REQUIRE_CAPTCHA/DELAY는 서버 CAPTCHA 인증 후에만 신규 등록된다. RESTRICT는 403/QUEUE_RESTRICTED다. 실제 BTS 정책 API와 실제 CAPTCHA 서비스는 연동하지 않았다. Mock 산술 문제는 테스트·시연용이며 실제 봇 방지 기능이 아니다.
+
+기존 POST `/api/v1/concerts/{concertId}/queue`는 body 없이 유지하고 선택적 `X-Captcha-Token` 헤더를 받는다. CAPTCHA 미인증은 403/CAPTCHA_REQUIRED, 잘못된 답·만료·재사용·다른 사용자/공연 증명은 403/CAPTCHA_INVALID다. 인증 전에는 해당 사용자의 Redis 대기열 멤버·deadline·등록 순번·입장 권한을 만들지 않는다. `captchaVerified:true`나 요청 action을 신뢰하지 않는다.
+
+추가 API는 모두 기존 Bearer 및 ApiResponse를 사용하며 성공은 200/COMMON_200이다.
+
+| API | 요청 | data |
+|---|---|---|
+| POST /api/v1/concerts/{concertId}/queue/captcha-challenges | body 없음 | challengeId, question, expiresAt |
+| POST /api/v1/concerts/{concertId}/queue/captcha-verifications | `{challengeId,answer}` | captchaToken, expiresAt |
+
+인증 증명은 사용자·공연·정책 action에 묶이며, 등록 Lua가 검증·일회용 소비·대기열 삽입을 원자적으로 수행한다. 문제는 기본 2분·답 제출 최대 5회, 증명은 기본 2분이다. ALLOW 사용자에게 문제 발급 요청은 400, Redis/정책 제공자 장애는 503으로 처리한다.
+
+일반 그룹을 후순위보다 우선 입장시키며 같은 그룹은 FIFO다. GET position은 일반 ZRANK+1, 후순위는 일반 대기자 수+후순위 ZRANK+1이므로 일반 유입 시 후순위 순번이 늘어날 수 있다. 활성 WAITING/ADMITTED는 정책을 재적용하지 않고 그룹·등록 sequence·deadline·권한을 유지한다(자연스러운 승격·만료·순번 이동은 적용). 이탈·만료 후 재등록할 때만 정책을 다시 평가한다. DELAY도 일반 대기자가 없고 빈자리가 있으면 즉시 입장한다. 엄격한 일반 우선으로 후순위가 기아·대기 만료될 수 있으며 이번 MVP에 기아 방지 정책은 없다.
+
+Redis TIME·입장 정원·TTL·만료 보존과 #17의 선점 입장 권한 검사 및 유효한 hold의 입장 만료 후 확정 정책은 유지한다. 기존 waiting을 일반 그룹으로 재사용하고 waiting-delayed를 추가한다. 구버전·신버전 Lua 혼용 배포는 지원하지 않는다. [설정·API 호출·Redis 상세·테스트](../backend/scripts/README-PriorityQueue.md)를 참고한다. 아래 #15의 전역 FIFO 설명은 정책 비활성화 또는 같은 그룹 내에서 적용되며 그룹 간 순서는 본 #16 계약을 우선한다.
+
+작성일: 2026-11-01. 범위: FE 분석과 백엔드 설계 및 구현. 현재 계약은 위 **Issue #16 차등 대기열** 및 아래 **Issue #17 입장 권한 검증**, **Issue #15 Redis FIFO 대기열**, **2단계 예매 구현**과 [backend 실행 안내](../backend/README.md)를 우선 적용한다. 이후의 초기 FE 분석·가정은 현재 코드와 비교하기 위한 기록이다.
 
 ### Issue #17 입장 권한 검증 (현재 구현)
 
@@ -24,11 +43,11 @@
 
 본인 hold 누락/만료/해제는 기존 410/HOLD_EXPIRED, 타인 hold는 기존 403/FORBIDDEN을 유지한다. 이미 확정한 동일 hold의 재요청은 기존 예매를 반환하는 멱등 처리를 유지하며 이후 hold deadline 경과만으로 재확정을 거부하지 않는다. 기존 충돌 검증과 트랜잭션·잠금·롤백·hold_id UNIQUE는 유지한다.
 
-선점 해제, 예매 취소, 본인 예매 내역에는 대기열 검사를 추가하지 않는다. 공연 목록·상세·좌석 목록은 기존 공개 정책을 유지한다. 구현 완료 범위는 FIFO 및 선점 입장 권한 강제이며, BTS 이상 탐지 기반 차등 대기열(#16), FE 연동, QR/검표는 후속 범위다. [검증 및 직접 PowerShell API 호출](../backend/scripts/README-QueueAdmission.md)을 참고한다.
+선점 해제, 예매 취소, 본인 예매 내역에는 대기열 검사를 추가하지 않는다. 공연 목록·상세·좌석 목록은 기존 공개 정책을 유지한다. FIFO 및 선점 입장 권한 강제에 더해 #16 Mock 차등 대기열은 위 현재 계약을 따른다. 실제 BTS 정책·CAPTCHA 서비스, FE 연동, QR/검표는 후속 범위다. [검증 및 직접 PowerShell API 호출](../backend/scripts/README-QueueAdmission.md)을 참고한다.
 
 ### Issue #15 Redis FIFO 대기열 (현재 계약)
 
-대기열 API 계약은 아래와 같으며 좌석 선점에 대한 입장 권한 강제는 위 #17 현재 계약을 따른다. BTS 점수·차등 순위·CAPTCHA는 사용하지 않는다.
+대기열 API 계약은 아래와 같으며 좌석 선점에 대한 입장 권한 강제는 위 #17 현재 계약을 따른다. #15 당시에는 BTS 점수·차등 순위·CAPTCHA를 사용하지 않았으며 현재 Mock 차등 처리와 CAPTCHA는 위 #16 계약을 따른다.
 
 | Method / URL | 인증 / Request | 정상 응답 |
 |---|---|---|

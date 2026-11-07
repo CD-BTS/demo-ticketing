@@ -1,6 +1,8 @@
 # 데모 티켓팅 ERD 설계안
 
-**현재 #15/#17 상태:** FIFO 및 선점 입장 권한은 Redis에서 관리하며 MySQL queue_entries/admissions 테이블은 추가하지 않는다. 선점 생성 서비스에서 현재 ADMITTED를 강제하고 예매 확정은 유효한 본인 hold를 기준으로 한다. 기존 hold/booking 스키마는 그대로 유지한다. 아래 1·2단계 상태와 MySQL 대기열 모델은 구현 이력·초기 제안이며 현재 계약은 [API 명세](api-spec.md)의 #17/#15를 따른다. 차등 대기열(#16), QR/검표는 후속 범위다.
+**Issue #16:** 별도 MySQL 테이블 없이 Redis waiting(일반)/waiting-delayed(후순위), 공통 deadlines/admitted/expired/sequence를 사용한다. CAPTCHA 문제·일회용 인증 증명도 공연 hash tag 아래 TTL이 있는 Redis HASH로 관리한다. 기존 hold/booking 및 BTS 사용자 매핑 스키마는 변경하지 않는다. 실제 BTS 정책 API·실제 CAPTCHA 연동은 미완료이며 [현재 계약](api-spec.md)의 #16을 따른다.
+
+**현재 #15/#17 상태:** FIFO 및 선점 입장 권한은 Redis에서 관리하며 MySQL queue_entries/admissions 테이블은 추가하지 않는다. 선점 생성 서비스에서 현재 ADMITTED를 강제하고 예매 확정은 유효한 본인 hold를 기준으로 한다. 기존 hold/booking 스키마는 그대로 유지한다. 아래 1·2단계 상태와 MySQL 대기열 모델은 구현 이력·초기 제안이며 현재 계약은 [API 명세](api-spec.md)의 #16/#17/#15를 따른다. 실제 BTS 정책·CAPTCHA 서비스와 QR/검표는 후속 범위다.
 
 작성일: 2026-11-01. [API 명세 및 프론트엔드 분석](api-spec.md) 7.2절의 데모 테이블 설계를 관계도로 보완한다. 초기에는 모두 설계 제안이었으며 현재 생성한 SQL/조회 Entity와 미구현 부분은 아래 1단계 상태로 구분한다. FE 타입이 출발점이며 아래 구조가 기존 BTS DB 구조라는 뜻은 아니다.
 
