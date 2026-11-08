@@ -8,7 +8,8 @@ import com.bts.demoticketing.booking.entity.ReservationRecords.Booking;
 
 public final class BookingDtos {
     private BookingDtos(){}
-    public record HoldRequest(@NotNull @Size(min=1,max=4) List<@NotBlank @Size(max=20) String> seatIds){}
+    public record HoldRequest(@NotNull @Size(min=1,max=4) List<@NotBlank @Size(max=20) String> seatIds,
+            @Size(max=36) String attemptId,@Size(max=36) String transitionId){}
     public record ConfirmRequest(@NotBlank @Size(max=50) String holdId,
             @NotBlank @Size(max=100) String paymentIdentifier){}
     public record HoldResponse(String holdId,String concertId,List<String> seatIds,OffsetDateTime expiresAt){}

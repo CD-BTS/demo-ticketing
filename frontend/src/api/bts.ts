@@ -5,7 +5,7 @@ import { request, sleep, tokenStore, USE_MOCK_BTS, USE_MOCK_TICKETING } from './
 import { getAutoCancelCount, ticketing } from './ticketing'
 import type { AccountRisk, BehaviorEventPayload, BtsUser } from './types'
 
-/** POST /api/v1/users — 사용자 등록 (구현 완료: sy kim) */
+/** Demo 세션을 발급하고 브라우저 인증 토큰을 저장한다. */
 export async function registerUser(userId: string): Promise<BtsUser> {
   if (USE_MOCK_BTS) {
     await sleep(200)
@@ -17,17 +17,16 @@ export async function registerUser(userId: string): Promise<BtsUser> {
   return res
 }
 
-/** GET /api/v1/users/{userId} — 사용자 상세 조회 (구현 완료) */
+/** BTS 사용자 상세 조회. Demo 백엔드에는 해당 조회 경로가 없다. */
 export async function getUser(userId: string): Promise<BtsUser> {
   if (USE_MOCK_BTS) return { userId }
   return request<BtsUser>('GET', `/users/${encodeURIComponent(userId)}`)
 }
 
-/** POST /api/v1/events — 사용자 행동 이벤트 수집 (구현 완료) */
+/** 브라우저 텔레메트리는 서버가 생성하는 업무 이벤트와 구분한다. */
 export async function sendBehaviorEvent(payload: BehaviorEventPayload): Promise<void> {
-  // 데모 백엔드는 브라우저의 9종 행동 이벤트를 받지 않는다(서버가 BOOKING/CANCEL만 BTS로 전송).
+  // Demo 업무·예매 단계 이벤트는 서버가 관측해 Outbox로 전송한다.
   if (USE_MOCK_BTS || !USE_MOCK_TICKETING) {
-    console.debug('[event skipped]', payload.eventType, payload.metadata ?? '')
     return
   }
   await request<unknown>('POST', '/events', payload)

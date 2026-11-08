@@ -8,7 +8,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.dao.DataAccessException;
 import jakarta.validation.constraints.*;
 import com.bts.demoticketing.common.exception.ApiException;
@@ -27,7 +27,7 @@ public class CaptchaService {
     private final CaptchaVerifier verifier;
     private final long challengeTtl,grantTtl;
     private final int attempts;
-    private final DefaultRedisScript<List> script=new DefaultRedisScript<>();
+    private final RedisScript<?> script=RedisScript.of(new ClassPathResource("captcha.lua"),List.class);
     public CaptchaService(StringRedisTemplate redis,QueueStore queues,org.springframework.beans.factory.ObjectProvider<CaptchaVerifier> providers,
             @Value("${demo.captcha.mode:disabled}") String mode,
             @Value("${demo.captcha.challenge-ttl:PT2M}") Duration challengeTtl,
@@ -37,7 +37,6 @@ public class CaptchaService {
             throw new IllegalArgumentException("Invalid CAPTCHA configuration; real provider is not implemented");
         this.redis=redis;this.queues=queues;this.verifier=providers.getIfAvailable();
         this.challengeTtl=challengeTtl.toMillis();this.grantTtl=grantTtl.toMillis();this.attempts=attempts;
-        script.setLocation(new ClassPathResource("captcha.lua"));script.setResultType(List.class);
     }
     public static String digest(String value){
         try{return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));}
@@ -46,7 +45,7 @@ public class CaptchaService {
     private static String nonce(){byte[] bytes=new byte[32];new SecureRandom().nextBytes(bytes);return HexFormat.of().formatHex(bytes);}
     private void enabled(){if(verifier==null)throw new ApiException(ResponseCode.SERVICE_UNAVAILABLE);}
     private List<?> call(List<String> keys,String... args){
-        try{var result=redis.execute(script,keys,(Object[])args);if(result==null)throw new IllegalStateException("Invalid CAPTCHA response");return result;}
+        try{var result=redis.execute(script,keys,(Object[])args);if(!(result instanceof List<?> values))throw new IllegalStateException("Invalid CAPTCHA response");return values;}
         catch(DataAccessException e){throw new ApiException(ResponseCode.SERVICE_UNAVAILABLE);}
     }
     public Challenge challenge(String concert,long user,PolicyDecisionClient.Action action){
@@ -56,6 +55,9 @@ public class CaptchaService {
         return new Challenge(id,problem.question(),Instant.ofEpochMilli(Long.parseLong(result.get(0).toString())));
     }
     public Grant verify(String concert,long user,Verification body){
+        return verify(concert,user,body,null);
+    }
+    public Grant verify(String concert,long user,Verification body,String transition){
         enabled();String token=nonce();String key=queues.base(concert)+"captcha-challenge:"+body.challengeId();
         // The provider comparison is separate; attempts, expiry and single successful
         // verification are checked again atomically in Lua against the expected digest.
@@ -63,9 +65,11 @@ public class CaptchaService {
         try{expected=(String)redis.opsForHash().get(key,"answer");}
         catch(DataAccessException e){throw new ApiException(ResponseCode.SERVICE_UNAVAILABLE);}
         boolean valid=expected!=null&&verifier.verify(expected,body.answer());
-        var result=call(List.of(key,queues.base(concert)+"captcha-grant:"+digest(token)),"verify",Long.toString(user),
-                valid?expected:"invalid",Long.toString(grantTtl));
+        String replay=queues.base(concert)+"captcha-replay:"+user+":"+(transition==null?nonce():transition);
+        var result=call(List.of(key,queues.base(concert)+"captcha-grant:"+digest(token),replay),"verify",Long.toString(user),
+                valid?expected:"invalid",Long.toString(grantTtl),digest(body.challengeId()+":"+body.answer()),token);
+        if(result.get(0).toString().equals("CONFLICT"))throw new ApiException(ResponseCode.DATA_CONFLICT);
         if(!result.get(0).toString().equals("OK"))throw new ApiException(ResponseCode.CAPTCHA_INVALID);
-        return new Grant(token,Instant.ofEpochMilli(Long.parseLong(result.get(1).toString())));
+        return new Grant(result.size()>2?result.get(2).toString():token,Instant.ofEpochMilli(Long.parseLong(result.get(1).toString())));
     }
 }

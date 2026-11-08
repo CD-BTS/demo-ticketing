@@ -8,10 +8,12 @@ import { dateTime, won } from '../components/format'
 import SeatMap from '../components/SeatMap'
 import { useBehavior } from '../hooks/useBehavior'
 import { recordRequest, recordStay } from '../risk/signals'
+import { clearAttempt, getAttempt, reportStage } from '../api/bookingAttempts'
+import { queueApi } from '../api/queue'
 
 const MAX_SEATS = 4
 
-export default function ConcertDetailPage() {
+export default function ConcertDetailPage({ attemptId }: { attemptId?: string }) {
   const { id = '' } = useParams()
   const { userId } = useAuth()
   const track = useBehavior()
@@ -24,9 +26,10 @@ export default function ConcertDetailPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  // "예매 소요 시간" feature 후보: 좌석 화면 진입 시각 기준 경과 시간을 이벤트에 실어 보낸다
+  // 브라우저 좌석 화면 관측 시간이며 서버 BOOKING 소요 시간과는 별개다.
   const enteredAt = useRef(Date.now())
   const firstSelectDone = useRef(false)
+  const reserving = useRef(false)
   const elapsed = () => Date.now() - enteredAt.current
 
   const loadSeats = useCallback(async () => {
@@ -83,23 +86,30 @@ export default function ConcertDetailPage() {
     })
   }
 
-  // "예매하기": 좌석을 선점한 뒤 곧바로 결제 화면으로 이동 (별도의 "예매 확정" 단계 없음)
   const doReserve = async () => {
-    if (!userId || !selected.length) return
+    if (!userId || !selected.length || reserving.current) return
+    reserving.current = true
     setBusy(true)
     setError('')
     recordRequest(userId, 'attempt') // 예매 시도(recent_booking_count)
     try {
-      const h = await ticketing.holdSeats(id, userId, selected)
+      const h = await ticketing.holdSeats(id, userId, selected, attemptId)
       track('HOLD_SEAT', { concertId: id, seatIds: selected, elapsedMs: elapsed() })
       nav(`/concerts/${id}/payment`, { state: { hold: h } })
     } catch (e) {
+      if (attemptId && userId) {
+        try {
+          const state = await getAttempt(userId, id)
+          if (state?.holdId) {
+            const h = await ticketing.getHold(state.holdId)
+            nav(`/concerts/${id}/payment`, { state: { hold: h } });return
+          }
+        } catch { /* A lost response is unknown; preserve the attempt for retry. */ }
+      }
       const msg = e instanceof ApiError ? e.message : '좌석 선점에 실패했습니다.'
       setError(msg)
       track('HOLD_FAILED', { concertId: id, seatIds: selected, code: e instanceof ApiError ? e.code : 'UNKNOWN' })
-      setSelected([])
-      await loadSeats()
-      setBusy(false)
+      try { await loadSeats() } finally { setBusy(false);reserving.current = false }
     }
   }
 
@@ -147,8 +157,13 @@ export default function ConcertDetailPage() {
         {error && <p className="error" role="alert">{error}</p>}
 
         <button className="btn btn-primary btn-block" disabled={!selected.length || busy} onClick={doReserve}>
-          {busy ? '처리 중…' : '예매하기'}
+          {busy ? '처리 중…' : '선점 후 결제'}
         </button>
+        {attemptId && <button className="btn btn-ghost btn-block" disabled={busy} onClick={async () => {
+          if (!userId) return
+          try { await queueApi.leave(id);await reportStage(userId, id, 'SEAT_SELECTION', 'ABANDONED');clearAttempt(userId, id);nav('/') }
+          catch (e) { setError((e as Error).message) }
+        }}>예매 시도 취소</button>}
       </aside>
     </div>
   )

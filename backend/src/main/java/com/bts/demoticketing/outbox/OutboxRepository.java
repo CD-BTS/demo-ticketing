@@ -24,13 +24,23 @@ public class OutboxRepository {
                 """,user,service,UUID.randomUUID().toString(),booking+":"+type,booking,type,occurred,metadata,now,now);
     }
 
+    public long appendAttempt(long user,String service,String attempt,long journal,LocalDateTime occurred,String metadata,LocalDateTime now){
+        String transition="attempt-event:"+journal;
+        jdbc.update("""
+            INSERT INTO outbox_events(user_id,service_id,external_event_id,business_transition_id,aggregate_id,
+            event_type,occurred_at_utc,metadata,next_attempt_at,created_at)
+            VALUES(?,?,?,?,?,'BOOKING_ATTEMPT',?,?,?,?)
+            """,user,service,UUID.randomUUID().toString(),transition,"attempt:"+attempt,occurred,metadata,now,now);
+        return jdbc.queryForObject("SELECT id FROM outbox_events WHERE business_transition_id=? AND event_type='BOOKING_ATTEMPT'",Long.class,transition);
+    }
+
     public Optional<Message> claim(LocalDateTime now,String serviceId){
         List<Message> rows=jdbc.query("""
                 SELECT e.* FROM outbox_events e
                 WHERE e.service_id=? AND ((e.delivery_status IN ('PENDING','RETRY') AND e.next_attempt_at<=?)
                     OR (e.delivery_status='IN_FLIGHT' AND e.locked_until<=?))
-                AND NOT EXISTS (SELECT 1 FROM outbox_events older WHERE older.service_id=e.service_id AND older.aggregate_id=e.aggregate_id
-                    AND older.id<e.id AND older.delivery_status<>'SENT')
+                AND (e.event_type='BOOKING_ATTEMPT' OR NOT EXISTS (SELECT 1 FROM outbox_events older WHERE older.service_id=e.service_id AND older.aggregate_id=e.aggregate_id
+                    AND older.id<e.id AND older.delivery_status<>'SENT'))
                 ORDER BY e.id LIMIT 1 FOR UPDATE SKIP LOCKED
                 """,mapper,serviceId,now,now);
         if(rows.isEmpty())return Optional.empty();
