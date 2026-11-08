@@ -145,7 +145,7 @@ class SeatConcurrencyMySqlTests {
         var acquired=new CountDownLatch(1);var release=new CountDownLatch(1);var paused=new AtomicBoolean();
         doAnswer(invocation->{
             long start=System.nanoTime();Object result=invocation.callRealMethod();
-            var ids=(Collection<Long>)invocation.getArgument(0);
+            Collection<?> ids=invocation.getArgument(0,Collection.class);
             if(ids.contains(firstSeat)&&paused.compareAndSet(false,true)){
                 acquired.countDown();assertTrue(release.await(15,TimeUnit.SECONDS));
             }
