@@ -17,6 +17,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.*;
 import org.springframework.test.web.servlet.MockMvc;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.type.TypeReference;
 import com.bts.demoticketing.booking.dto.BookingDtos.*;
 import com.bts.demoticketing.booking.service.ReservationService;
 import com.bts.demoticketing.common.exception.ApiException;
@@ -385,7 +386,7 @@ class ReservationMySqlTests {
             try{
                 if(!"integration-only-key".equals(exchange.getRequestHeaders().getFirst("X-API-Key"))){reply(exchange,401,"UNAUTHORIZED",null);return;}
                 String raw=new String(exchange.getRequestBody().readAllBytes(),StandardCharsets.UTF_8);
-                Map<String,Object> body=json.readValue(raw,Map.class);
+                Map<String,Object> body=json.readValue(raw,new TypeReference<Map<String,Object>>() {});
                 if(!"it-reservations".equals(body.get("serviceId"))){reply(exchange,403,"FORBIDDEN",null);return;}
                 if(exchange.getRequestURI().getPath().endsWith("/users")){
                     String external=body.get("externalUserId").toString();

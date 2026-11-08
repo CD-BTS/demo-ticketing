@@ -16,6 +16,7 @@ import com.bts.demoticketing.common.response.ResponseCode;
 import com.bts.demoticketing.outbox.OutboxRepository;
 import com.bts.demoticketing.user.entity.DemoUser;
 import com.bts.demoticketing.queue.QueueService;
+import com.bts.demoticketing.attempt.AttemptService;
 
 @Service
 public class ReservationService {
@@ -27,7 +28,8 @@ public class ReservationService {
     private final Set<String> paymentIds;
     private final QueueService queue;
     private final ReservationTransactions transactions;
-    public ReservationService(ReservationRepository repo,OutboxRepository outbox,JsonMapper json,Clock clock,QueueService queue,ReservationTransactions transactions,
+    private final AttemptService attempts;
+    public ReservationService(ReservationRepository repo,OutboxRepository outbox,JsonMapper json,Clock clock,QueueService queue,ReservationTransactions transactions,AttemptService attempts,
             @Value("${demo.hold-duration:PT5M}") Duration holdDuration,
             @Value("${demo.payment-identifiers:test-pay-shared-01,test-pay-shared-02,test-pay-shared-03}") String payments){
         if(holdDuration.isNegative()||holdDuration.isZero())throw new IllegalArgumentException("Hold duration must be positive");
@@ -35,6 +37,7 @@ public class ReservationService {
         this.paymentIds=Set.of(payments.split(","));
         this.queue=queue;
         this.transactions=transactions;
+        this.attempts=attempts;
     }
     private LocalDateTime now(){return LocalDateTime.ofInstant(clock.instant(),ZoneOffset.UTC).truncatedTo(ChronoUnit.MICROS);}
     private static ApiException fail(ResponseCode code){return new ApiException(code);}
@@ -43,9 +46,25 @@ public class ReservationService {
     private BookingResponse response(Booking b){return BookingResponse.from(b,repo.concert(b.concertId()).publicId(),repo.bookingCodes(b.id()));}
 
     public HoldResponse hold(String concertId,DemoUser user,List<String> requested){
+        return hold(concertId,user,requested,null);
+    }
+    public HoldResponse hold(String concertId,DemoUser user,List<String> requested,String attemptId){
+        return hold(concertId,user,requested,attemptId,null);
+    }
+    public HoldResponse hold(String concertId,DemoUser user,List<String> requested,String attemptId,String transitionId){
+        if(transitionId!=null)AttemptService.uuid(transitionId);
         if(requested==null||requested.isEmpty()||requested.size()>4||new HashSet<>(requested).size()!=requested.size())
             throw fail(ResponseCode.INVALID_SEAT_SELECTION);
-        return transactions.run(()->holdOnce(concertId,user,requested));
+        try{return transactions.run(()->{
+            attempts.active(attemptId,user,concertId);
+            HoldResponse result=holdOnce(concertId,user,requested);
+            if(attemptId!=null)attempts.linkHold(attemptId,user,concertId,repo.hold(result.holdId()).orElseThrow().id(),result.holdId());
+            return result;
+        });}catch(ApiException e){
+            if(attemptId!=null&&transitionId!=null&&Set.of(ResponseCode.SEAT_ALREADY_TAKEN,ResponseCode.SEAT_NOT_FOUND,ResponseCode.QUEUE_NOT_ADMITTED).contains(e.getResponseCode()))
+                attempts.observe(attemptId,user,concertId,"hold-rejected:"+transitionId,"SEAT_HOLD","REJECTED",e.getResponseCode().getCode());
+            throw e;
+        }
     }
     private HoldResponse holdOnce(String concertId,DemoUser user,List<String> requested){
         Concert c=repo.concert(concertId).orElseThrow(()->fail(ResponseCode.CONCERT_NOT_FOUND));
@@ -126,6 +145,8 @@ public class ReservationService {
         if(elapsed.isNegative())throw fail(ResponseCode.INTERNAL_SERVER_ERROR);
         BigDecimal seconds=BigDecimal.valueOf(elapsed.toNanos(),9).setScale(6,java.math.RoundingMode.DOWN);
         Booking b=repo.createBooking("b_"+UUID.randomUUID(),h,c,now,seconds,paymentIdentifier,observedIp,seats);
+        String attempt=attempts.forHold(h.id());
+        attempts.completed(attempt,b.id(),b.publicId());
         Map<String,Object> metadata=metadata(b,c.publicId());
         metadata.put("bookingDurationSeconds",seconds);
         metadata.put("paymentIdentifier",paymentIdentifier);metadata.put("ipAddress",observedIp);
@@ -153,6 +174,11 @@ public class ReservationService {
 
     @Transactional(readOnly=true)
     public List<BookingResponse> mine(DemoUser user){return repo.bookings(user.id()).stream().map(this::response).toList();}
+    @Transactional(readOnly=true)
+    public HoldResponse getHold(String holdId,DemoUser user){
+        Hold h=repo.hold(holdId).orElseThrow(()->fail(ResponseCode.HOLD_EXPIRED));
+        owner(h.userId(),user);return response(h,repo.concert(h.concertId()));
+    }
     public void expire(long concertId){
         for(Hold candidate:repo.expired(concertId,now()))expireHold(candidate.id());
     }
@@ -160,7 +186,9 @@ public class ReservationService {
         transactions.run(()->{
             repo.lockSeats(repo.holdSeatIds(holdId));
             Hold h=repo.lockHold(holdId);
-            if(h.status().equals("ACTIVE")&&!h.expiresAt().isAfter(now()))repo.endHold(h.id(),"EXPIRED");
+            if(h.status().equals("ACTIVE")&&!h.expiresAt().isAfter(now())){
+                repo.endHold(h.id(),"EXPIRED");attempts.expired(h.id());
+            }
             return null;
         });
     }
@@ -171,6 +199,7 @@ public class ReservationService {
         Map<String,Object> m=new LinkedHashMap<>();
         m.put("concertId",concert);m.put("performanceStartsAt",b.startAt().toInstant(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS).toString());
         m.put("performanceEndsAt",b.endAt().toInstant(ZoneOffset.UTC).truncatedTo(ChronoUnit.SECONDS).toString());m.put("ticketIds",repo.ticketIds(b.id()));
+        String attempt=attempts.forBooking(b.id());if(attempt!=null)m.put("attemptId",attempt);
         return m;
     }
     private void enqueue(DemoUser user,Booking b,String type,Map<String,Object> metadata,LocalDateTime now){

@@ -8,7 +8,6 @@ import com.bts.demoticketing.common.exception.ApiException;
 import com.bts.demoticketing.common.response.ResponseCode;
 import com.bts.demoticketing.concert.repository.ConcertRepository;
 import com.bts.demoticketing.seat.dto.SeatResponse;
-import com.bts.demoticketing.seat.repository.ConcertSeatRepository;
 
 @Service
 @Transactional(readOnly = true)

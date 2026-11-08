@@ -1,17 +1,10 @@
-/**
- * 대기열 API (공연 입장 대기)
- *
- * 서연(BE)의 Redis 대기열 API가 나오기 전까지는 시간 경과로 번호가 줄어드는 mock 으로 동작한다.
- * 실제 API가 확정되면 `real` 의 경로/응답만 맞추고 VITE_USE_MOCK_QUEUE=false 로 바꾸면 된다.
- *
- * position : 내 앞에 대기 중인 인원 수. 0 이면 바로 입장(좌석 선택)할 수 있다.
- * behind   : 내 뒤에 대기 중인 인원 수.
- */
-import { request, sleep } from './client'
+// 실제 대기열의 WAITING 순번은 1부터 시작하며 ADMITTED만 입장을 허용한다.
+import { request, sleep, USE_MOCK_TICKETING } from './client'
 
 export interface QueueStatus {
   position: number
   behind: number
+  status?: string
 }
 export interface QueueTicket extends QueueStatus {
   ticketId: string
@@ -19,12 +12,12 @@ export interface QueueTicket extends QueueStatus {
 
 export interface QueueApi {
   /** 대기열 진입 (같은 사용자·공연이면 기존 순번을 그대로 돌려준다) */
-  join(concertId: string, userId: string): Promise<QueueTicket>
-  status(ticketId: string): Promise<QueueStatus>
+  join(concertId: string, userId: string, attemptId?: string, captchaToken?: string): Promise<QueueTicket>
+  status(ticketId: string, attemptId?: string): Promise<QueueStatus>
   leave(ticketId: string): Promise<void>
 }
 
-const USE_MOCK_QUEUE = import.meta.env.VITE_USE_MOCK_QUEUE !== 'false'
+const USE_MOCK_QUEUE = USE_MOCK_TICKETING && import.meta.env.VITE_USE_MOCK_QUEUE !== 'false'
 
 // ---- mock -------------------------------------------------------
 const STEP_MS = 1000 // 앞사람이 1명 빠지는 간격
@@ -82,12 +75,24 @@ const mock: QueueApi = {
   },
 }
 
-// ---- real (TODO: 서연 Redis 대기열 API 확정 후 경로·응답 맞추기. 아래 경로는 가정) ----
+interface ServerQueue { status: string; position: number | null; expiresAt: string | null }
+const headers = (attemptId?: string, captchaToken?: string): Record<string, string> => ({
+  ...(attemptId ? { 'X-Booking-Attempt': attemptId } : {}),
+  ...(captchaToken ? { 'X-Captcha-Token': captchaToken } : {}),
+})
+const adapt = (s: ServerQueue): QueueStatus => ({ status: s.status, position: s.status === 'ADMITTED' ? 0 : s.position ?? -1, behind: 0 })
 const real: QueueApi = {
-  join: (concertId) => request('POST', `/concerts/${concertId}/queue`),
-  status: (ticketId) => request('GET', `/queue/${ticketId}`),
-  leave: (ticketId) => request('DELETE', `/queue/${ticketId}`),
+  async join(concertId, _user, attemptId, captchaToken) {
+    const s = await request<ServerQueue>('POST', `/concerts/${concertId}/queue`, undefined, headers(attemptId, captchaToken))
+    return { ticketId: concertId, ...adapt(s) }
+  },
+  async status(concertId, attemptId) { return adapt(await request<ServerQueue>('GET', `/concerts/${concertId}/queue/me`, undefined, headers(attemptId))) },
+  leave: concertId => request('DELETE', `/concerts/${concertId}/queue/me`),
 }
+
+export interface CaptchaChallenge { challengeId: string; question: string; expiresAt: string }
+export const captchaChallenge = (concert: string, attempt: string | undefined) => request<CaptchaChallenge>('POST', `/concerts/${concert}/queue/captcha-challenges`, undefined, headers(attempt))
+export const captchaVerify = (concert: string, attempt: string | undefined, challengeId: string, answer: string, transition: string) => request<{ captchaToken: string; expiresAt: string }>('POST', `/concerts/${concert}/queue/captcha-verifications`, { challengeId, answer }, { ...headers(attempt), 'X-Attempt-Transition': transition })
 
 export const queueApi: QueueApi = USE_MOCK_QUEUE ? mock : real
 

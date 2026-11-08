@@ -27,6 +27,7 @@ export async function request<T>(
   method: 'GET' | 'POST' | 'PUT' | 'DELETE',
   path: string,
   body?: unknown,
+  extraHeaders?: Record<string, string>,
 ): Promise<T> {
   const token = tokenStore.get()
   const res = await fetch(`${BASE}/api/v1${path}`, {
@@ -34,6 +35,7 @@ export async function request<T>(
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...extraHeaders,
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })

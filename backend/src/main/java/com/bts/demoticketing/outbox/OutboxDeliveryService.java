@@ -34,7 +34,8 @@ public class OutboxDeliveryService {
                 if(uuid==null){uuid=bts.register(user);tx.mapUser(user.id(),uuid);}
                 Map<String,Object> body=new LinkedHashMap<>();
                 body.put("serviceId",m.serviceId());body.put("externalEventId",m.externalId());
-                body.put("userId",uuid);body.put("eventType",m.eventType());body.put("bookingId",m.aggregateId());
+                body.put("userId",uuid);body.put("eventType",m.eventType());
+                if(!m.eventType().equals("BOOKING_ATTEMPT"))body.put("bookingId",m.aggregateId());
                 body.put("occurredAt",m.occurredAt().toInstant(ZoneOffset.UTC).toString());
                 body.put("metadata",json.readValue(m.metadata(),Map.class));
                 payload=json.writeValueAsString(body);

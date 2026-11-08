@@ -9,7 +9,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.core.StringRedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Repository;
 import com.bts.demoticketing.common.exception.ApiException;
 import com.bts.demoticketing.common.response.ResponseCode;
@@ -20,7 +20,7 @@ public class QueueStore {
     private final String prefix;
     private final int capacity;
     private final long waitTtl, admitTtl, retention;
-    private final DefaultRedisScript<List> script = new DefaultRedisScript<>();
+    private final RedisScript<?> script = RedisScript.of(new ClassPathResource("queue.lua"), List.class);
 
     public QueueStore(StringRedisTemplate redis,
             @Value("${demo.queue.key-prefix:demo-ticketing:queue}") String prefix,
@@ -33,8 +33,6 @@ public class QueueStore {
             throw new IllegalArgumentException("Queue prefix, capacity and TTLs must be valid and positive");
         this.redis=redis; this.prefix=prefix; this.capacity=capacity;
         this.waitTtl=waitTtl.toMillis(); this.admitTtl=admitTtl.toMillis(); this.retention=retention.toMillis();
-        script.setLocation(new ClassPathResource("queue.lua"));
-        script.setResultType(List.class);
     }
 
     public record Snapshot(String status, Long position, Instant expiresAt) {}
@@ -56,12 +54,12 @@ public class QueueStore {
         boolean provided=captchaToken!=null&&!captchaToken.isBlank();
         String grant=base+"captcha-grant:"+(provided?com.bts.demoticketing.captcha.CaptchaService.digest(captchaToken):"none");
         try {
-            List<?> result=redis.execute(script,
+            var response=redis.execute(script,
                     List.of(base+"waiting",base+"deadlines",base+"admitted",base+"expired",base+"sequence",base+"waiting-delayed",grant),
                     operation,Long.toString(user),Integer.toString(capacity),Long.toString(waitTtl),
                     Long.toString(admitTtl),Long.toString(retention),action,
                     policy.delayed()?"1":"0",policy.captchaRequired()?"1":"0",policy.restricted()?"1":"0",provided?"1":"0");
-            if(result==null || result.size()!=4) throw new IllegalStateException("Invalid queue script response");
+            if(!(response instanceof List<?> result) || result.size()!=4) throw new IllegalStateException("Invalid queue script response");
             String status=result.get(0).toString();
             if(status.equals("CAPTCHA_REQUIRED"))throw new ApiException(ResponseCode.CAPTCHA_REQUIRED);
             if(status.equals("CAPTCHA_INVALID"))throw new ApiException(ResponseCode.CAPTCHA_INVALID);

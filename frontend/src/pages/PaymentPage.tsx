@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, Navigate, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { cardsApi, CARD_DIGITS, type PaymentCard } from '../api/cards'
 import { ApiError, sleep } from '../api/client'
 import { paymentIdentifierFor } from '../api/paymentId'
@@ -10,8 +10,9 @@ import CardNumberField, { CardHelp } from '../components/CardNumberField'
 import { dateTime, seatLabel, won } from '../components/format'
 import { useBehavior } from '../hooks/useBehavior'
 import { recordRequest, recordStay } from '../risk/signals'
+import { clearAttempt, getAttempt, reportStage } from '../api/bookingAttempts'
 
-const PAY_DELAY_MS = 1200 // 결제 처리 중처럼 보이게 하는 mock 지연
+const PAY_DELAY_MS = 1200
 
 /** 결제 수단: 등록해 둔 카드를 고르거나, 카드번호를 직접 입력 */
 type Method = { kind: 'saved'; card: PaymentCard } | { kind: 'direct'; last4: string }
@@ -23,7 +24,10 @@ export default function PaymentPage() {
   const nav = useNavigate()
   const { userId } = useAuth()
   const track = useBehavior()
-  const hold = (location.state as { hold?: SeatHold } | null)?.hold
+  const [hold, setHold] = useState<SeatHold | undefined>((location.state as { hold?: SeatHold } | null)?.hold)
+  const [stageReady, setStageReady] = useState(false)
+  const [restoring, setRestoring] = useState(!hold)
+  const paymentLock = useRef(false)
 
   const [concert, setConcert] = useState<Concert | null>(null)
   const [seats, setSeats] = useState<Seat[]>([])
@@ -38,6 +42,34 @@ export default function PaymentPage() {
   const [leaving, setLeaving] = useState(false)
   const [remaining, setRemaining] = useState(() => (hold ? secondsLeft(hold.expiresAt) : 0))
   const mountedAt = useRef(Date.now())
+
+  useEffect(() => {
+    if (!userId) return
+    let alive = true
+    getAttempt(userId, id).then(async a => {
+      if (a?.bookingId) {
+        const mine = await ticketing.listMyBookings(userId)
+        const existing = mine.find(b => b.id === a.bookingId)
+        if (alive && existing) { setBooking(existing);setPhase('done');setHold({ holdId: a.holdId ?? '', concertId: id, seatIds: existing.seatIds, expiresAt: existing.createdAt }) }
+      } else if (a?.holdId && !hold) {
+        const snapshot = await ticketing.getHold(a.holdId)
+        if (alive) setHold(snapshot)
+      }
+    }).catch(e => { if (alive) setError((e as Error).message) }).finally(() => { if (alive) setRestoring(false) })
+    return () => { alive = false }
+  }, [userId, id])
+
+  useEffect(() => {
+    if (!hold || !userId || phase === 'done') return
+    let alive = true
+    let timer: ReturnType<typeof setTimeout>
+    const record = async () => {
+      try { await reportStage(userId, id, 'PAYMENT');if (alive) setStageReady(true) }
+      catch (e) { if (alive) { setError((e as Error).message);timer = setTimeout(record, 2000) } }
+    }
+    setStageReady(false);record()
+    return () => { alive = false;clearTimeout(timer) }
+  }, [hold, userId, id, phase === 'done'])
 
   // 결제 화면 체류 시간(step_stay_time)
   useEffect(() => {
@@ -63,11 +95,11 @@ export default function PaymentPage() {
       .then(setCards)
       .catch(() => setCards([])) // 카드 목록을 못 불러와도 직접 입력으로 결제할 수 있다
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, userId])
+  }, [id, userId, hold])
 
-  // 선점 유지 시간 카운트다운 (결제 완료 후에는 멈춘다)
   useEffect(() => {
     if (!hold || phase === 'done') return
+    setRemaining(secondsLeft(hold.expiresAt))
     const t = setInterval(() => setRemaining(secondsLeft(hold.expiresAt)), 1000)
     return () => clearInterval(t)
   }, [hold, phase])
@@ -77,31 +109,35 @@ export default function PaymentPage() {
   const expired = phase !== 'done' && remaining <= 0
   const ready = mySeats.length > 0 // 좌석·금액 정보가 로딩된 뒤에만 결제 가능
   const paying = phase === 'paying'
-  const locked = paying || expired || !ready || leaving // 결제 수단 버튼 비활성 조건
+  const locked = !stageReady || paying || expired || !ready || leaving // 결제 수단 버튼 비활성 조건
 
-  if (!hold || !userId) return <Navigate to={`/concerts/${id}`} replace />
+  if (restoring) return <p role="status">예매 진행 상태를 확인하고 있습니다.</p>
+  if (!hold || !userId) return <section className="card"><p>{error || '선점 정보를 찾지 못했습니다.'}</p><Link to={`/concerts/${id}`}>공연으로 돌아가기</Link></section>
 
-  // '이전으로': 잡아 둔 좌석을 풀어 주고 좌석 선택 화면으로 돌아간다
   const goBack = async () => {
     setLeaving(true)
     track('BOOKING_CANCEL', { concertId: id, stage: 'PAYMENT', seatIds: hold.seatIds })
     try {
       await ticketing.releaseHold(hold.holdId, userId)
+      await reportStage(userId, id, 'PAYMENT', 'ABANDONED')
+      clearAttempt(userId, id)
     } catch {
-      /* 해제에 실패해도 만료되면 풀리므로 화면 이동은 계속한다 */
+      setError('선점 해제 상태를 확인하지 못했습니다. 다시 시도해 주세요.')
+      setLeaving(false)
+      return
     }
     nav(`/concerts/${id}`)
   }
 
-  // 카드를 고르면(또는 직접 입력 후 결제하기를 누르면) 바로 결제한다
   const pay = async (m: Method) => {
-    if (locked) return
+    if (locked || paymentLock.current) return
+    paymentLock.current = true
     setPhase('paying')
     setPayingKey(m.kind === 'saved' ? m.card.id : DIRECT)
     setError('')
     recordRequest(userId, 'pay')
     try {
-      await sleep(PAY_DELAY_MS) // TODO: 실제 결제(PG) 연동 시 이 자리에서 결제 요청. 카드번호는 서버로 직접 보내지 않는다.
+      await sleep(PAY_DELAY_MS) // 결제 시연용 지연. 카드번호는 서버로 전송하지 않는다.
       const last4 = m.kind === 'saved' ? m.card.last4 : m.last4
       const b = await ticketing.confirmBooking(hold.holdId, userId, paymentIdentifierFor(last4))
       track('BOOKING_CONFIRM', {
@@ -118,10 +154,11 @@ export default function PaymentPage() {
       setError(e instanceof ApiError ? e.message : '결제에 실패했습니다. 다시 시도해 주세요.')
       setPhase('form')
       setPayingKey(null)
+    } finally {
+      paymentLock.current = false
     }
   }
 
-  // ---- 예매 완료 ----
   if (phase === 'done' && booking) {
     return (
       <div className="pay-wrap">
@@ -145,7 +182,6 @@ export default function PaymentPage() {
     )
   }
 
-  // ---- 결제 ----
   const mm = String(Math.floor(remaining / 60)).padStart(2, '0')
   const ss = String(remaining % 60).padStart(2, '0')
 

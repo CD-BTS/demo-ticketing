@@ -22,12 +22,17 @@ public class BookingController {
     @PostMapping("/concerts/{concertId}/seat-holds")
     public ResponseEntity<ApiResponse<HoldResponse>> hold(@PathVariable @NotBlank @Size(max=50) String concertId,
             @Valid @RequestBody HoldRequest body,HttpServletRequest request){
-        HoldResponse hold=reservations.hold(concertId,auth.require(request),body.seatIds());
+        var user=auth.require(request);
+        HoldResponse hold=reservations.hold(concertId,user,body.seatIds(),body.attemptId(),body.transitionId());
         return ResponseEntity.status(201).body(ApiResponse.success(ResponseCode.CREATED,hold));
     }
     @DeleteMapping("/seat-holds/{holdId}")
     public ApiResponse<Void> release(@PathVariable @NotBlank @Size(max=50) String holdId,HttpServletRequest request){
         reservations.release(holdId,auth.require(request));return ApiResponse.success(null);
+    }
+    @GetMapping("/seat-holds/{holdId}")
+    public ApiResponse<HoldResponse> getHold(@PathVariable @NotBlank @Size(max=50) String holdId,HttpServletRequest request){
+        return ApiResponse.success(reservations.getHold(holdId,auth.require(request)));
     }
     @PostMapping("/bookings")
     public ResponseEntity<ApiResponse<BookingResponse>> confirm(@Valid @RequestBody ConfirmRequest body,HttpServletRequest request){

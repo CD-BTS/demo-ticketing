@@ -6,11 +6,34 @@ import java.util.*;
 import com.sun.net.httpserver.HttpServer;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.core.type.TypeReference;
 import com.bts.demoticketing.user.entity.DemoUser;
 import static org.junit.jupiter.api.Assertions.*;
 
 class BtsClientContractTests {
     private final JsonMapper json=JsonMapper.builder().build();
+    @Test void attemptEventDoesNotNeedAFabricatedBookingIdAndPolicyUsesServerKey()throws Exception{
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        String uuid=UUID.randomUUID().toString();
+        server.createContext("/api/v1/events",e->{
+            Map<String,Object> data=new LinkedHashMap<>(json.readValue(e.getRequestBody().readAllBytes(),new TypeReference<Map<String,Object>>() {}));
+            assertFalse(data.containsKey("bookingId"));data.put("eventId",7);
+            byte[] body=json.writeValueAsBytes(Map.of("success",true,"code","COMMON_201","data",data));
+            e.sendResponseHeaders(201,body.length);e.getResponseBody().write(body);e.close();
+        });
+        server.createContext("/api/v1/users/"+uuid+"/policy-decisions",e->{
+            assertEquals("test-only",e.getRequestHeaders().getFirst("X-API-Key"));
+            assertEquals("QUEUE_JOIN",json.readValue(e.getRequestBody().readAllBytes(),Map.class).get("context"));
+            byte[] body=json.writeValueAsBytes(Map.of("success",true,"code","COMMON_200","data",Map.of("action","REQUIRE_CAPTCHA")));
+            e.sendResponseHeaders(200,body.length);e.getResponseBody().write(body);e.close();
+        });
+        server.start();
+        try{
+            var client=new BtsClient(new BtsSettings(true,"http://127.0.0.1:"+server.getAddress().getPort(),"service","test-only"),json);
+            assertEquals(7,client.send(json.writeValueAsString(Map.of("serviceId","service","externalEventId","e1","userId",uuid,"eventType","BOOKING_ATTEMPT"))));
+            assertEquals(PolicyDecisionClient.Action.REQUIRE_CAPTCHA,client.policy(uuid));
+        }finally{server.stop(0);}
+    }
 
     @Test void disabledDeliveryNeverUsesAnEmptyKey(){
         var client=new BtsClient(new BtsSettings(false,"","service",""),json);

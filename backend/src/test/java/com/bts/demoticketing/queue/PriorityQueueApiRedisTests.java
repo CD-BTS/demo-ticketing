@@ -41,7 +41,7 @@ class PriorityQueueApiRedisTests {
     static DemoUser user(long id){return new DemoUser(id,"u"+id,"demo","u"+id,null);}
     @BeforeEach void setup(){when(auth.require(any())).thenAnswer(i->user(Long.parseLong(((jakarta.servlet.http.HttpServletRequest)i.getArgument(0)).getHeader("Test-User"))));}
     @AfterEach void cleanup(){var keys=redis.keys(PREFIX+":*");if(keys!=null&&!keys.isEmpty())redis.delete(keys);}
-    Map<String,Object> data(MvcResult result)throws java.io.UnsupportedEncodingException{return (Map<String,Object>)json.readValue(result.getResponse().getContentAsString(),Map.class).get("data");}
+    Map<String,Object> data(MvcResult result)throws java.io.UnsupportedEncodingException{return json.convertValue(json.readTree(result.getResponse().getContentAsString()).get("data"),new tools.jackson.core.type.TypeReference<Map<String,Object>>() {});}
     Map<String,Object> join(long id,String token,int expected)throws Exception{
         var request=post(PATH).header("Test-User",id);
         if(token!=null)request.header("X-Captcha-Token",token);

@@ -1,14 +1,8 @@
-/**
- * 티켓팅 서비스 API (공연 · 좌석 · 선점 · 예매)
- *
- * 아직 백엔드 명세가 없어서 localStorage 기반 mock으로 동작한다.
- * 서연(BE)의 API가 나오면 `real` 객체의 TODO 엔드포인트만 채우고
- * VITE_USE_MOCK_TICKETING=false 로 바꾸면 화면 코드는 그대로 쓸 수 있다.
- */
 import { ApiError, request, sleep, USE_MOCK_TICKETING } from './client'
+import { operationTransition } from './bookingAttempts'
 import type { Booking, Concert, Seat, SeatGrade, SeatHold, TicketQr } from './types'
 
-const HOLD_MS = 5 * 60 * 1000 // 선점 유지 시간 (가정: 5분)
+const HOLD_MS = 5 * 60 * 1000
 const ROWS = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H']
 const SEATS_PER_ROW = 12
 
@@ -16,9 +10,10 @@ export interface TicketingApi {
   listConcerts(): Promise<Concert[]>
   getConcert(id: string): Promise<Concert>
   listSeats(concertId: string, userId: string): Promise<Seat[]>
-  holdSeats(concertId: string, userId: string, seatIds: string[]): Promise<SeatHold>
+  holdSeats(concertId: string, userId: string, seatIds: string[], attemptId?: string): Promise<SeatHold>
   /** 선점 해제 (결제 화면에서 '이전으로' 등). 이미 만료/해제됐어도 오류 없이 끝난다. */
   releaseHold(holdId: string, userId: string): Promise<void>
+  getHold(holdId: string): Promise<SeatHold>
   /** paymentIdentifier: 서버가 허용한 테스트 결제 식별자(test-pay-shared-01~03). 실제 카드번호가 아니다. */
   confirmBooking(holdId: string, userId: string, paymentIdentifier: string): Promise<Booking>
   cancelBooking(bookingId: string, userId: string): Promise<Booking>
@@ -27,9 +22,7 @@ export interface TicketingApi {
   getTicketQr(bookingId: string, userId: string): Promise<TicketQr | null>
 }
 
-// ------------------------------------------------------------------
 // Mock 데이터
-// ------------------------------------------------------------------
 const CONCERTS: Concert[] = [
   {
     id: 'c1',
@@ -116,7 +109,7 @@ function purge(s: Stored) {
 
 /**
  * 선점 후 확정하지 않고 만료된 횟수 (Credit 의 Cauto).
- * mock 에서만 계산한다. 실제 서버 연동 시에는 서버가 집계한 값을 받아야 하므로 0 을 돌려준다(TODO).
+ * Mock에서만 계산하며 실제 예매 설정에서는 서버 집계 API가 없어 0을 반환한다.
  */
 export function getAutoCancelCount(userId: string): number {
   if (!USE_MOCK_TICKETING) return 0
@@ -135,6 +128,11 @@ const soldOut = (concertId: string): Set<string> => {
 }
 
 const mock: TicketingApi = {
+  async getHold(holdId) {
+    const hold = load().holds.find(h => h.holdId === holdId)
+    if (!hold) throw new ApiError('HOLD_EXPIRED', '선점 정보를 찾지 못했습니다.', 410)
+    return hold
+  },
   async listConcerts() {
     await sleep(250)
     return CONCERTS
@@ -250,7 +248,7 @@ const mock: TicketingApi = {
     await sleep(200)
     return load().bookings.filter((b) => b.userId === userId)
   },
-  // QR 발급 API 전: 기본은 null("발급 전"). 화면 확인용으로 VITE_MOCK_QR=true 면 임시 토큰을 준다.
+  // Mock QR은 VITE_MOCK_QR=true일 때만 생성한다.
   async getTicketQr(bookingId) {
     await sleep(200)
     if (import.meta.env.VITE_MOCK_QR !== 'true') return null
@@ -258,14 +256,15 @@ const mock: TicketingApi = {
   },
 }
 
-// ------------------------------------------------------------------
-// 실제 API (서연 데모 백엔드 `feat/#9/demo-backend` 기준, docs/api-spec.md)
-// ------------------------------------------------------------------
+// Demo API: docs/api-spec.md
 const real: TicketingApi = {
+  getHold: holdId => request('GET', `/seat-holds/${holdId}`),
   listConcerts: () => request('GET', '/concerts'),
   getConcert: (id) => request('GET', `/concerts/${id}`),
   listSeats: (concertId) => request('GET', `/concerts/${concertId}/seats`),
-  holdSeats: (concertId, _u, seatIds) => request('POST', `/concerts/${concertId}/seat-holds`, { seatIds }),
+  holdSeats: (concertId, user, seatIds, attemptId) => request('POST', `/concerts/${concertId}/seat-holds`, {
+    seatIds, attemptId, transitionId: attemptId ? operationTransition(user, concertId, `hold:${[...seatIds].sort().join(',')}`) : undefined,
+  }),
   releaseHold: (holdId) => request('DELETE', `/seat-holds/${holdId}`),
   confirmBooking: (holdId, _u, paymentIdentifier) => request('POST', '/bookings', { holdId, paymentIdentifier }),
   cancelBooking: (bookingId) => request('POST', `/bookings/${bookingId}/cancel`),

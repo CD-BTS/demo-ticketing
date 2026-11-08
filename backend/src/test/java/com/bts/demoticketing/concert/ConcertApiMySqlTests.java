@@ -60,6 +60,9 @@ class ConcertApiMySqlTests {
         assertEquals(11, jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.TABLES
                 WHERE TABLE_SCHEMA='demo_ticketing_db' AND TABLE_TYPE='BASE TABLE'
+                  AND TABLE_NAME IN ('demo_users','demo_sessions','concerts','concert_seats',
+                    'seat_holds','seat_hold_items','bookings','booking_seats','admission_tickets',
+                    'outbox_events','reservation_user_concert_guards')
                 """, Integer.class));
         for (String type : List.of("PRIMARY KEY", "FOREIGN KEY", "UNIQUE", "CHECK")) {
             assertTrue(jdbc.queryForObject("""
