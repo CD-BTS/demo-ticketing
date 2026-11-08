@@ -44,6 +44,12 @@ public class BtsClient {
             return id;
         }catch(RuntimeException e){throw new DeliveryFailure("INVALID_BTS_RESPONSE",false);}
     }
+    public PolicyDecisionClient.Action policy(String uuid){
+        try{UUID.fromString(uuid);}catch(RuntimeException e){throw new DeliveryFailure("INVALID_BTS_USER",false);}
+        Map<?,?> data=post("/api/v1/users/"+uuid+"/policy-decisions",json.writeValueAsString(Map.of("context","QUEUE_JOIN")));
+        try{return PolicyDecisionClient.Action.valueOf(String.valueOf(data.get("action")));}
+        catch(RuntimeException e){throw new DeliveryFailure("INVALID_BTS_POLICY",false);}
+    }
     private Map<?,?> post(String path,String payload){
         if(!settings.enabled)throw new DeliveryFailure("BTS_DISABLED",true);
         HttpRequest request=HttpRequest.newBuilder(URI.create(settings.baseUrl.replaceAll("/+$","")+path))
