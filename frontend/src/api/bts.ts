@@ -1,4 +1,4 @@
-import { calcCredit } from '../risk/credit'
+import { applyServerPolicy, calcCredit, type ServerPolicy } from '../risk/credit'
 import { computeFeatures, toCreditInput } from '../risk/features'
 import { getSignals } from '../risk/signals'
 import { request, sleep, tokenStore, USE_MOCK_BTS, USE_MOCK_TICKETING } from './client'
@@ -42,6 +42,9 @@ export async function sendBehaviorEvent(payload: BehaviorEventPayload): Promise<
  *  - card_reuse_count / ip_booking_density : 서버·Redis 실시간 집계
  *  - 또는 GET /users/{id}/credit 이 base_credit·dynamic_penalty·credit_score·credit_grade·penalty_policy 를
  *    바로 주면 그 값을 그대로 표시하면 된다.
+ *
+ * 화면에 표시하는 등급(applied)은 이 참고 산정이 아니라 서버 정책(GET /users/me/policy)을 따른다.
+ * 대기열의 CAPTCHA·후순위가 같은 정책으로 정해지므로, 등급 표시와 실제 제재가 어긋나지 않는다.
  */
 export async function getAccountRisk(userId: string): Promise<AccountRisk> {
   let bookings: { status: string; createdAt: string }[] = []
@@ -59,5 +62,11 @@ export async function getAccountRisk(userId: string): Promise<AccountRisk> {
       anomaly: 0,
     }),
   )
-  return { ...result, features }
+  if (USE_MOCK_TICKETING) return { ...result, features, applied: applyServerPolicy(result, null) }
+  try {
+    const server = await request<ServerPolicy>('GET', '/users/me/policy')
+    return { ...result, features, applied: applyServerPolicy(result, server) }
+  } catch {
+    return { ...result, features, applied: null }
+  }
 }

@@ -50,11 +50,26 @@ public class BtsClient {
         try{return PolicyDecisionClient.Action.valueOf(String.valueOf(data.get("action")));}
         catch(RuntimeException e){throw new DeliveryFailure("INVALID_BTS_POLICY",false);}
     }
-    private Map<?,?> post(String path,String payload){
+    /** 마이페이지 표시용 조회. 정책 결정(POST)과 달리 BTS에 아무것도 기록하지 않는다. */
+    public record Account(Integer creditScore,String tier,Double anomalyScore,PolicyDecisionClient.Action latestAction){}
+    public Account account(String uuid){
+        try{UUID.fromString(uuid);}catch(RuntimeException e){throw new DeliveryFailure("INVALID_BTS_USER",false);}
+        Map<?,?> data=exchange("/api/v1/users/"+uuid,null);
+        PolicyDecisionClient.Action action=null;
+        if(data.get("latestAction") instanceof String name){
+            try{action=PolicyDecisionClient.Action.valueOf(name);}catch(IllegalArgumentException e){throw new DeliveryFailure("INVALID_BTS_POLICY",false);}
+        }
+        return new Account(data.get("creditScore") instanceof Number n?n.intValue():null,
+                data.get("tier") instanceof String t?t:null,
+                data.get("anomalyScore") instanceof Number a?a.doubleValue():null,action);
+    }
+    private Map<?,?> post(String path,String payload){return exchange(path,payload);}
+    private Map<?,?> exchange(String path,String payload){
         if(!settings.enabled)throw new DeliveryFailure("BTS_DISABLED",true);
-        HttpRequest request=HttpRequest.newBuilder(URI.create(settings.baseUrl.replaceAll("/+$","")+path))
-                .timeout(Duration.ofSeconds(3)).header("Content-Type","application/json")
-                .header("X-API-Key",settings.apiKey).POST(HttpRequest.BodyPublishers.ofString(payload)).build();
+        HttpRequest.Builder builder=HttpRequest.newBuilder(URI.create(settings.baseUrl.replaceAll("/+$","")+path))
+                .timeout(Duration.ofSeconds(3)).header("X-API-Key",settings.apiKey);
+        HttpRequest request=(payload==null?builder.GET()
+                :builder.header("Content-Type","application/json").POST(HttpRequest.BodyPublishers.ofString(payload))).build();
         HttpResponse<String> response;
         try{response=http.send(request,HttpResponse.BodyHandlers.ofString());}
         catch(InterruptedException e){Thread.currentThread().interrupt();throw new DeliveryFailure("BTS_INTERRUPTED",true);}

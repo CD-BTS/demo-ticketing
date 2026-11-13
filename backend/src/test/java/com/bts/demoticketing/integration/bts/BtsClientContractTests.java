@@ -70,4 +70,25 @@ class BtsClientContractTests {
             assertEquals("ACTIVE",requests.get(0).get("accountStatus"));
         }finally{server.stop(0);}
     }
+    @Test void accountLookupIsAReadOnlyGetWithTheServiceKey()throws Exception{
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        List<String> calls=new ArrayList<>();
+        String uuid=UUID.randomUUID().toString();
+        server.createContext("/api/v1/users/"+uuid,e->{
+            calls.add(e.getRequestMethod()+" "+e.getRequestURI().getPath()+" "+e.getRequestHeaders().getFirst("X-API-Key"));
+            Map<String,Object> data=new LinkedHashMap<>();
+            data.put("userId",uuid);data.put("creditScore",30);data.put("tier","SUSPICIOUS");
+            data.put("anomalyScore",null);data.put("latestAction","REQUIRE_CAPTCHA");
+            byte[] body=json.writeValueAsBytes(Map.of("success",true,"code","COMMON_200","message","ok","data",data));
+            e.sendResponseHeaders(200,body.length);e.getResponseBody().write(body);e.close();
+        });
+        server.start();
+        try{
+            var client=new BtsClient(new BtsSettings(true,"http://127.0.0.1:"+server.getAddress().getPort(),"service","test-only"),json);
+            var account=client.account(uuid);
+            assertEquals(30,account.creditScore());assertEquals("SUSPICIOUS",account.tier());
+            assertNull(account.anomalyScore());assertEquals(PolicyDecisionClient.Action.REQUIRE_CAPTCHA,account.latestAction());
+            assertEquals(List.of("GET /api/v1/users/"+uuid+" test-only"),calls);
+        }finally{server.stop(0);}
+    }
 }

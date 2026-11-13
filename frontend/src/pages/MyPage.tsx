@@ -43,6 +43,10 @@ export default function MyPage() {
       .catch(() => setRisk(null))
   }, [userId, bookings]) // 예매/취소 후에도 다시 계산
 
+  const applied = risk?.applied ?? null
+  // 서버 정책이 등급을 정하는 경우(또는 서버 연동 중 조회 실패)에는 브라우저 산정의 정책 줄을 숨긴다.
+  const serverDecides = !!risk && (!applied || applied.fromServer)
+
   const cancel = async (b: Booking) => {
     if (!userId || !window.confirm(`'${b.concertTitle}' 예매를 취소할까요?`)) return
     setBusyId(b.id)
@@ -65,14 +69,23 @@ export default function MyPage() {
       <div className="account">
         <span>
           계정 등급{' '}
-          <b className={risk ? `grade grade-${risk.gradeCode}` : ''}>{risk ? risk.grade : '—'}</b>
-          {risk && <span className="account-sub"> (신용 {risk.credit}점)</span>}
+          <b className={applied ? `grade grade-${applied.gradeCode}` : ''}>
+            {applied ? applied.grade : risk ? '확인 불가' : '—'}
+          </b>
+          {applied && applied.credit !== null && <span className="account-sub"> (신용 {applied.credit}점)</span>}
         </span>
-        <span>의심 점수 <b>{risk ? risk.dynamicPenalty : '—'}</b></span>
+        {applied?.fromServer ? (
+          <span>적용 정책 <b>{applied.policy}</b></span>
+        ) : (
+          <span>의심 점수 <b>{applied && risk ? risk.dynamicPenalty : '—'}</b></span>
+        )}
       </div>
+      {risk && !applied && (
+        <p className="small muted">서버에서 계정 정책을 불러오지 못했습니다. 잠시 후 다시 확인해 주세요.</p>
+      )}
       {risk && (
         <details className="account-detail">
-          <summary>산정 내역 보기</summary>
+          <summary>{applied?.fromServer ? '브라우저 참고 산정 보기' : '산정 내역 보기'}</summary>
           <ul>
             <li><span>기본 신뢰도 (base_credit)</span><b>{risk.baseCredit}</b></li>
             {risk.penalties.map((p) => (
@@ -83,7 +96,7 @@ export default function MyPage() {
             ))}
             <li className="sum"><span>감점 합계 (dynamic_penalty = 의심 점수)</span><b>{risk.dynamicPenalty}</b></li>
             <li className="sum"><span>신용 점수 (credit_score)</span><b>{risk.credit}</b></li>
-            <li><span>적용 정책 (penalty_policy)</span><b>{risk.policy}</b></li>
+            {!serverDecides && <li><span>적용 정책 (penalty_policy)</span><b>{risk.policy}</b></li>}
           </ul>
 
           <h3 className="feature-title">행동 지표 (Feature)</h3>
@@ -97,10 +110,17 @@ export default function MyPage() {
               </li>
             ))}
           </ul>
-          <p className="small muted">
-            브라우저에서 측정 가능한 지표만 반영한 참고값입니다. AI 이상 점수, 카드·IP 집계, 관람·노쇼 이력은 서버 연동 후
-            반영됩니다. 적용 정책(CAPTCHA, 대기열 후순위)은 정책 표시만 하며 아직 화면에 적용되지는 않습니다.
-          </p>
+          {serverDecides ? (
+            <p className="small muted">
+              브라우저에서 측정 가능한 지표만 반영한 참고값입니다. 위에 표시된 계정 등급과 적용 정책은 이 값이 아니라
+              서버의 정책 결정을 따르며, 대기열 진입 시 같은 정책(CAPTCHA, 대기열 후순위)이 적용됩니다.
+            </p>
+          ) : (
+            <p className="small muted">
+              브라우저에서 측정 가능한 지표만 반영한 참고값입니다. AI 이상 점수, 카드·IP 집계, 관람·노쇼 이력은 서버 연동 후
+              반영됩니다. 적용 정책(CAPTCHA, 대기열 후순위)은 정책 표시만 하며 아직 화면에 적용되지는 않습니다.
+            </p>
+          )}
         </details>
       )}
       {justBooked && <p className="notice">예매가 완료되었습니다.</p>}
