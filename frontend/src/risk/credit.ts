@@ -118,3 +118,67 @@ export function calcCredit(input: CreditInput): CreditResult {
     policy: tier.policy,
   }
 }
+
+// ---- 서버 정책 반영 ----
+// 대기열의 CAPTCHA·후순위는 서버 정책 결정(action)으로 정해진다. 화면의 등급도 같은 출처를 따라야
+// "CAPTCHA는 뜨는데 등급은 정상"처럼 어긋나지 않는다. 위의 브라우저 산식은 참고값으로만 남긴다.
+
+export type PolicyAction = 'ALLOW' | 'REQUIRE_CAPTCHA' | 'DELAY' | 'RESTRICT'
+
+/** GET /users/me/policy 응답. source: NONE(정책 미사용) / MOCK(서버 로컬 설정) / BTS(원격 FDS) */
+export interface ServerPolicy {
+  source: 'NONE' | 'MOCK' | 'BTS'
+  action: PolicyAction | null
+  creditScore: number | null
+  tier: string | null
+  anomalyScore: number | null
+}
+
+/** 화면에 표시할 최종 등급. fromServer 가 false 면 브라우저 참고값 그대로다. */
+export interface AppliedStanding {
+  gradeCode: CreditGradeCode
+  grade: CreditGrade
+  policy: string
+  credit: number | null // 서버가 준 신용 점수. 서버가 점수를 주지 않으면(mock 정책) null
+  fromServer: boolean
+  source: ServerPolicy['source']
+}
+
+const ACTION_STANDING: Record<PolicyAction, { code: CreditGradeCode; policy: string }> = {
+  ALLOW: { code: 'NORMAL', policy: '일반 입장' },
+  REQUIRE_CAPTCHA: { code: 'SUSPICIOUS', policy: 'CAPTCHA' },
+  DELAY: { code: 'HIGH_RISK', policy: 'CAPTCHA + 후순위' },
+  RESTRICT: { code: 'HIGH_RISK', policy: '예매 제한' },
+}
+
+const severity = (code: CreditGradeCode) => GRADE_TIERS.findIndex((t) => t.code === code)
+
+/**
+ * 서버 정책이 있으면 그 값으로 등급을 정한다. action 과 신용 점수가 서로 다른 등급을 가리키면
+ * 더 엄격한 쪽을 표시한다(예: 신용 점수는 정상이지만 AI 이상 점수 때문에 CAPTCHA 가 걸린 경우).
+ */
+export function applyServerPolicy(local: CreditResult, server: ServerPolicy | null): AppliedStanding {
+  const byAction = server?.action ? ACTION_STANDING[server.action] : null
+  const byCredit = typeof server?.creditScore === 'number' ? gradeTierOf(server.creditScore) : null
+  if (!server || (!byAction && !byCredit)) {
+    return {
+      gradeCode: local.gradeCode,
+      grade: local.grade,
+      policy: local.policy,
+      credit: local.credit,
+      fromServer: false,
+      source: server?.source ?? 'NONE',
+    }
+  }
+  const codes = [byAction?.code, byCredit?.code].filter((c): c is CreditGradeCode => !!c)
+  const code = codes.reduce((worst, c) => (severity(c) > severity(worst) ? c : worst))
+  const tier = GRADE_TIERS.find((t) => t.code === code)!
+  return {
+    gradeCode: tier.code,
+    grade: tier.label,
+    policy: byAction && byAction.code === code ? byAction.policy : tier.policy,
+    credit: server.creditScore,
+    fromServer: true,
+    source: server.source,
+  }
+}

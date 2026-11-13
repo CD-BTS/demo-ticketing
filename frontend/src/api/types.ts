@@ -96,6 +96,10 @@ export interface TicketQr {
 }
 
 // ---- 계정 등급 / 의심 점수 (산식: src/risk/credit.ts, Feature: src/risk/features.ts) ----
-import type { CreditResult } from '../risk/credit'
+import type { AppliedStanding, CreditResult } from '../risk/credit'
 import type { BehaviorFeatures } from '../risk/features'
-export type AccountRisk = CreditResult & { features: BehaviorFeatures }
+/**
+ * CreditResult 는 브라우저 참고 산정, applied 는 화면에 표시할 최종 등급(서버 정책 우선).
+ * 서버와 연동 중인데 정책을 받아오지 못하면 applied 는 null 이다(참고값을 실제 등급처럼 보이지 않게 한다).
+ */
+export type AccountRisk = CreditResult & { features: BehaviorFeatures; applied: AppliedStanding | null }
