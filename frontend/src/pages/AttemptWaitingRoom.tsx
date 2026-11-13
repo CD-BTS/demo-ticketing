@@ -75,8 +75,8 @@ export default function AttemptWaitingRoom({ concertId, attemptId, onAdmit }: Pr
       <button className="btn btn-primary" disabled={busy || !answer}>확인</button>
       <button type="button" className="btn btn-ghost" onClick={() => setRetry(n => n + 1)}>새 문제</button>
     </form> : <p>{status?.status === 'WAITING' ? `현재 대기 순번 ${status.position}` : '입장 상태를 확인하고 있습니다.'}</p>}
-    {error && <p className="error" role="alert">{error}</p>}
-    <button className="btn btn-ghost" disabled={busy} onClick={() => setRetry(n => n + 1)}>다시 확인</button>
+      {error && <p className="error" role="alert">{error}</p>}
+      {!challenge && error && <button className="btn btn-ghost" disabled={busy} onClick={() => setRetry(n => n + 1)}>다시 확인</button>}
     <button className="btn btn-ghost" disabled={busy} onClick={leave}>예매 시도 취소</button>
   </section>
 }
